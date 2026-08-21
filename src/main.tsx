@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Amplify } from 'aws-amplify';
 import outputs from './amplify_outputs.json';
-import AppShell from './app/AppShell';
+import JayFitApp from './app/JayFitApp';
 import AuthGate from './AuthGate';
 import './styles.css';
 import './additions.css';
@@ -11,7 +11,7 @@ Amplify.configure(outputs as any);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AuthGate>{({user,logout}) => <AppShell user={user} logout={logout}/>}</AuthGate>
+    <AuthGate>{({user,logout}) => <JayFitApp user={user} logout={logout}/>}</AuthGate>
   </React.StrictMode>
 );
 
