@@ -5,6 +5,7 @@ import outputs from './amplify_outputs.json';
 import AppShell from './app/AppShell';
 import AuthGate from './AuthGate';
 import './styles.css';
+import './additions.css';
 
 Amplify.configure(outputs as any);
 
