@@ -9,6 +9,9 @@ const schema = a.schema({
       defaultRestSeconds: a.integer(),
       beginnerMode: a.boolean(),
       theme: a.string(),
+      autoRestTimer: a.boolean(),
+      preferencesJson: a.string(),
+      routineOverridesJson: a.string(),
       createdAtClient: a.datetime(),
       updatedAtClient: a.datetime(),
     })
@@ -27,6 +30,9 @@ const schema = a.schema({
       notes: a.string(),
       sorenessScore: a.integer(),
       sorenessAreasJson: a.string(),
+      planSnapshotJson: a.string(),
+      selectedCardio: a.string(),
+      substitutionsJson: a.string(),
     })
     .secondaryIndexes((index) => [index('date')])
     .authorization((allow) => [allow.owner()]),
@@ -36,10 +42,12 @@ const schema = a.schema({
       sessionId: a.id().required(),
       exerciseId: a.string().required(),
       exerciseName: a.string(),
+      phase: a.string(),
       setNumber: a.integer().required(),
       side: a.string(),
       setType: a.string().required(),
       weight: a.float(),
+      weightUnit: a.string(),
       reps: a.integer(),
       durationSeconds: a.integer(),
       completed: a.boolean(),
@@ -55,6 +63,11 @@ const schema = a.schema({
   ExerciseSetting: a
     .model({
       exerciseId: a.string().required(),
+      seat: a.string(),
+      backrest: a.string(),
+      handle: a.string(),
+      machine: a.string(),
+      pin: a.string(),
       machineSettingsJson: a.string(),
       preferredWeight: a.float(),
       preferredUnit: a.string(),
@@ -87,6 +100,8 @@ const schema = a.schema({
       date: a.string().required(),
       activityType: a.string().required(),
       durationMinutes: a.integer(),
+      sorenessScore: a.integer(),
+      sorenessAreasJson: a.string(),
       completed: a.boolean(),
       notes: a.string(),
     })
