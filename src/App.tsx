@@ -2,29 +2,31 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dumbbell, CalendarDays, Trophy, Settings, ChevronLeft, ChevronRight, Check, Flame,
   Cloud, CloudOff, Timer, Plus, Minus, X, TrendingUp, TrendingDown, LogOut, Download,
-  Upload, Trash2, SlidersHorizontal, HeartPulse, History, ChevronUp, ChevronDown,
-  RefreshCw, NotebookPen
+  Upload, Trash2, SlidersHorizontal, HeartPulse, ChevronUp, ChevronDown, RefreshCw,
+  NotebookPen, CirclePlus, CircleMinus
 } from 'lucide-react';
-import type { AppState, DayPlan, Exercise, MachineSetting, Phase, SessionEntry, SetEntry, Side } from './types';
-import { allExercises, applyRoutineOverrides, dayNames, dayOrder, findExercise, weeklyPlans } from './routine';
+import type { AppState, DayPlan, Exercise, MachineSetting, Phase, SessionEntry, SetEntry } from './types';
+import { applyRoutineOverrides, dayNames, dayOrder, findExercise, weeklyPlans } from './routine';
 import {
   createSetRows, derivePREvents, derivePRs, epley, exerciseHistory, loadState, localDateKey,
   monthlyStats, parseLocalDate, plateauStatus, previousExerciseSets, progressionSuggestion,
-  recoveryInsight, saveState, sessionCompletion, sessionStatusForDate, sessionVolume,
-  weeklyStrengthStreak, canonicalLb, DEFAULT_SETTINGS, slug
+  recoveryInsight, saveState, sessionStatusForDate, sessionVolume, weeklyStrengthStreak,
+  canonicalLb, DEFAULT_SETTINGS, slug
 } from './store';
-import { deleteCloudData, loadCloudState, saveMachineSetting, saveProfile, saveSession, saveSet, uploadLocalState } from './cloud';
+import {
+  deleteCloudData, deleteSetLog, loadCloudState, saveMachineSetting, saveProfile,
+  saveSession, saveSet, uploadLocalState
+} from './cloud';
 import { ExerciseVisual } from './visuals';
 
 type Tab='home'|'week'|'calendar'|'prs'|'settings';
 type FlowItem={exercise:Exercise;phase:Phase;originalId:string};
-
 type Props={user:any;logout:()=>Promise<void>};
 
-const strengthKinds=['push','pull','legs'];
 const sorenessAreas=['Chest','Shoulders','Arms','Back','Core','Glutes','Quads','Hamstrings','Calves'];
+const weightedWarmups=new Set(['external-rotation','scapular-pulldown','band-pull-apart-facepull','light-seated-row','chest-press-warmup','lat-pulldown-warmup','leg-press-warmup']);
 
-export default function App({user,logout}:Props){
+export default function App({logout}:Props){
   const [state,setState]=useState<AppState>(loadState);
   const stateRef=useRef(state);stateRef.current=state;
   const [tab,setTab]=useState<Tab>('home');
@@ -35,16 +37,16 @@ export default function App({user,logout}:Props){
   const [restSeconds,setRestSeconds]=useState(0);
   const [restRunning,setRestRunning]=useState(false);
   const [tick,setTick]=useState(0);
-  const [celebration,setCelebration]=useState<string>('');
+  const [celebration,setCelebration]=useState('');
   const [machineOpen,setMachineOpen]=useState(false);
   const [notesOpen,setNotesOpen]=useState(false);
   const [swapOpen,setSwapOpen]=useState(false);
   const [finishOpen,setFinishOpen]=useState(false);
-  const [summaryDate,setSummaryDate]=useState<string>('');
+  const [summaryDate,setSummaryDate]=useState('');
   const [calendarCursor,setCalendarCursor]=useState(parseLocalDate(dateKey));
   const [prExercise,setPrExercise]=useState('all');
   const [prMonth,setPrMonth]=useState('all');
-  const [historyExercise,setHistoryExercise]=useState<string>('');
+  const [historyExercise,setHistoryExercise]=useState('');
   const [settingsSection,setSettingsSection]=useState<'general'|'routine'|'data'>('general');
   const fileInput=useRef<HTMLInputElement>(null);
 
@@ -55,219 +57,127 @@ export default function App({user,logout}:Props){
   const syncFromCloud=async()=>{
     setCloudState('syncing');setCloudMessage('Syncing with AWS…');
     try{
-      const cloud=await loadCloudState();
-      const local=stateRef.current;
-      const mergedSets={...local.sets};
-      Object.entries(cloud.sets||{}).forEach(([d,exs])=>{mergedSets[d]={...(mergedSets[d]||{}),...exs};});
-      const merged:AppState={
-        ...local,
-        sessions:{...local.sessions,...(cloud.sessions||{})},
-        sets:mergedSets,
-        machineSettings:{...local.machineSettings,...(cloud.machineSettings||{})},
-        settings:cloud.profileCloudId ? {...local.settings,...(cloud.settings||{})} : local.settings,
-        profileCloudId:cloud.profileCloudId || local.profileCloudId,
-        lastSyncAt:new Date().toISOString(),
-      };
+      const cloud=await loadCloudState();const local=stateRef.current;
+      const mergedSets={...local.sets};Object.entries(cloud.sets||{}).forEach(([d,exs])=>{mergedSets[d]={...(mergedSets[d]||{}),...exs};});
+      const merged:AppState={...local,sessions:{...local.sessions,...(cloud.sessions||{})},sets:mergedSets,machineSettings:{...local.machineSettings,...(cloud.machineSettings||{})},settings:cloud.profileCloudId?{...local.settings,...(cloud.settings||{})}:local.settings,profileCloudId:cloud.profileCloudId||local.profileCloudId,lastSyncAt:new Date().toISOString()};
       updateState(()=>merged);
       await uploadLocalState(merged,
         (date,id)=>updateState(p=>({...p,sessions:{...p.sessions,[date]:{...p.sessions[date],cloudId:id}}})),
         (date,exerciseId,index,id)=>updateState(p=>{const rows=[...(p.sets[date]?.[exerciseId]||[])];if(rows[index])rows[index]={...rows[index],cloudId:id};return {...p,sets:{...p.sets,[date]:{...(p.sets[date]||{}),[exerciseId]:rows}}};})
       );
-      const pid=await saveProfile(merged.profileCloudId,merged.settings);
-      if(pid)updateState(p=>({...p,profileCloudId:pid,lastSyncAt:new Date().toISOString()}));
+      const pid=await saveProfile(merged.profileCloudId,merged.settings);if(pid)updateState(p=>({...p,profileCloudId:pid,lastSyncAt:new Date().toISOString()}));
       setCloudState('synced');setCloudMessage('All changes saved online');
     }catch(e){console.error(e);setCloudState('offline');setCloudMessage('Offline cache active — changes remain on this device until sync returns');}
   };
 
-  useEffect(()=>{syncFromCloud()},[]);
+  useEffect(()=>{void syncFromCloud()},[]);
   useEffect(()=>{const id=setInterval(()=>setTick(x=>x+1),1000);return()=>clearInterval(id)},[]);
-  useEffect(()=>{
-    if(!restRunning||restSeconds<=0)return;
-    const id=setInterval(()=>setRestSeconds(s=>{if(s<=1){setRestRunning(false);return 0}return s-1}),1000);
-    return()=>clearInterval(id);
-  },[restRunning,restSeconds>0]);
+  useEffect(()=>{if(!restRunning||restSeconds<=0)return;const id=setInterval(()=>setRestSeconds(s=>{if(s<=1){setRestRunning(false);return 0}return s-1}),1000);return()=>clearInterval(id)},[restRunning,restSeconds>0]);
 
-  const date=parseLocalDate(dateKey);
-  const basePlan=weeklyPlans[date.getDay()];
+  const date=parseLocalDate(dateKey);const basePlan=weeklyPlans[date.getDay()];
   const plan=useMemo(()=>applyRoutineOverrides(basePlan,state.settings.routineOverrides),[basePlan,state.settings.routineOverrides]);
-  const session=state.sessions[dateKey];
-  const isFuture=date>parseLocalDate(localDateKey());
+  const session=state.sessions[dateKey];const isFuture=date>parseLocalDate(localDateKey());
 
-  const resolvedExercise=(ex:Exercise):Exercise=>{
-    const replacement=session?.substitutions?.[ex.id];
-    if(!replacement)return ex;
-    return {...ex,id:`sub-${slug(replacement)}`,name:replacement,note:`Substituted for ${ex.name} this session.`};
-  };
-
+  const resolvedExercise=(ex:Exercise):Exercise=>{const replacement=session?.substitutions?.[ex.id];return replacement?{...ex,id:`sub-${slug(replacement)}`,name:replacement,note:`Substituted for ${ex.name} this session.`}:ex};
   const flow=useMemo(()=>{
-    const result:FlowItem[]=[];
-    const add=(items:Exercise[],phase:Phase)=>items.forEach(original=>{
+    const result:FlowItem[]=[];const add=(items:Exercise[],phase:Phase)=>items.forEach(original=>{
       if(plan.kind==='cardio'&&original.type==='cardio'&&session?.selectedCardio&&original.id!==session.selectedCardio)return;
       if(plan.kind==='cardio'&&original.type==='cardio'&&!session?.selectedCardio)return;
-      const exercise=resolvedExercise(original);result.push({exercise,phase,originalId:original.id});
-    });
-    add(plan.warmup,'warmup');add(plan.main,'main');add(plan.cooldown,'cooldown');return result;
+      result.push({exercise:resolvedExercise(original),phase,originalId:original.id});
+    });add(plan.warmup,'warmup');add(plan.main,'main');add(plan.cooldown,'cooldown');return result;
   },[plan,session?.selectedCardio,JSON.stringify(session?.substitutions||{})]);
 
-  const ensureRows=(item:FlowItem):SetEntry[]=>{
-    const existing=stateRef.current.sets[dateKey]?.[item.exercise.id];
-    if(existing?.length)return existing;
+  const ensureRows=(item:FlowItem)=>{
+    const existing=stateRef.current.sets[dateKey]?.[item.exercise.id];if(existing?.length)return existing;
     const rows=createSetRows(item.exercise,item.phase,stateRef.current.settings.weightUnit);
-    updateState(p=>({...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[item.exercise.id]:rows}}}));
-    return rows;
+    updateState(p=>({...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[item.exercise.id]:rows}}}));return rows;
   };
 
   const ensureSession=async(start=false):Promise<SessionEntry>=>{
     let s=stateRef.current.sessions[dateKey];
-    if(!s){
-      s={date:dateKey,workoutType:plan.kind,status:start?'in_progress':'not_started',startedAt:start?new Date().toISOString():undefined,planSnapshot:JSON.stringify(plan),substitutions:{}};
-      updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:s!}}));
-    }else if(start&&!s.startedAt){
-      s={...s,status:'in_progress',startedAt:new Date().toISOString(),planSnapshot:s.planSnapshot||JSON.stringify(plan)};
-      updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:s!}}));
-    }
-    try{
-      const id=await saveSession(s,sessionVolume(stateRef.current,dateKey));
-      if(id&&!s.cloudId){s={...s,cloudId:id};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:s!}}));}
-      setCloudState('synced');
-    }catch(e){console.error(e);setCloudState('offline')}
+    if(!s){s={date:dateKey,workoutType:plan.kind,status:start?'in_progress':'not_started',startedAt:start?new Date().toISOString():undefined,planSnapshot:JSON.stringify(plan),substitutions:{}};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:s!}}));}
+    else if(start&&!s.startedAt){s={...s,status:'in_progress',startedAt:new Date().toISOString(),planSnapshot:s.planSnapshot||JSON.stringify(plan)};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:s!}}));}
+    try{const id=await saveSession(s,sessionVolume(stateRef.current,dateKey));if(id&&!s.cloudId){s={...s,cloudId:id};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:s!}}));}setCloudState('synced')}catch(e){console.error(e);setCloudState('offline')}
     return s;
   };
 
   const persistSet=async(item:FlowItem,index:number,set:SetEntry)=>{
-    try{
-      const s=await ensureSession(true);if(!s.cloudId)return;
-      const id=await saveSet(s.cloudId,set);
-      if(id&&!set.cloudId)updateState(p=>{const rows=[...(p.sets[dateKey]?.[item.exercise.id]||[])];if(rows[index])rows[index]={...rows[index],cloudId:id};return {...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[item.exercise.id]:rows}}};});
-      setCloudState('synced');
-    }catch(e){console.error(e);setCloudState('offline')}
+    try{const s=await ensureSession(true);if(!s.cloudId)return;const id=await saveSet(s.cloudId,set);if(id&&!set.cloudId)updateState(p=>{const rows=[...(p.sets[dateKey]?.[item.exercise.id]||[])];if(rows[index])rows[index]={...rows[index],cloudId:id};return {...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[item.exercise.id]:rows}}};});setCloudState('synced')}catch(e){console.error(e);setCloudState('offline')}
   };
 
   const setRow=(item:FlowItem,index:number,patch:Partial<SetEntry>,persist=true)=>{
     let changed:SetEntry|undefined;
-    updateState(p=>{
-      const rows=[...(p.sets[dateKey]?.[item.exercise.id]||createSetRows(item.exercise,item.phase,p.settings.weightUnit))];
-      rows[index]={...rows[index],...patch};changed=rows[index];
-      return {...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[item.exercise.id]:rows}}};
-    });
+    updateState(p=>{const rows=[...(p.sets[dateKey]?.[item.exercise.id]||createSetRows(item.exercise,item.phase,p.settings.weightUnit))];rows[index]={...rows[index],...patch};changed=rows[index];return {...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[item.exercise.id]:rows}}};});
     if(persist&&changed)void persistSet(item,index,changed);
   };
 
-  const requiredFlow=flow.filter(i=>!i.exercise.optional || (plan.kind==='cardio'&&i.exercise.id===session?.selectedCardio));
-  const completion=useMemo(()=>sessionCompletion(state,dateKey,requiredFlow.map(i=>i.exercise.id)),[state,dateKey,flow.length]);
+  const requiredFlow=flow.filter(i=>!i.exercise.optional||(plan.kind==='cardio'&&i.exercise.id===session?.selectedCardio));
+  const completion=useMemo(()=>{
+    let total=0,done=0;requiredFlow.forEach(item=>{const expected=item.exercise.unilateral?item.exercise.sets*2:item.exercise.sets;total+=expected;done+=(state.sets[dateKey]?.[item.exercise.id]||[]).filter(r=>r.done).length;});
+    return {total,done,percent:total?Math.min(100,Math.round(done/total*100)):0};
+  },[state,dateKey,requiredFlow.map(i=>i.exercise.id).join('|')]);
 
-  const firstIncomplete=()=>{
-    for(let i=0;i<flow.length;i++){
-      const rows=stateRef.current.sets[dateKey]?.[flow[i].exercise.id]||createSetRows(flow[i].exercise,flow[i].phase,stateRef.current.settings.weightUnit);
-      const idx=rows.findIndex(s=>!s.done);if(idx>=0)return {index:i,setIndex:idx};
-    }
-    return {index:Math.max(0,flow.length-1),setIndex:0};
-  };
+  const firstIncomplete=()=>{for(let i=0;i<flow.length;i++){const rows=stateRef.current.sets[dateKey]?.[flow[i].exercise.id]||createSetRows(flow[i].exercise,flow[i].phase,stateRef.current.settings.weightUnit);const idx=rows.findIndex(s=>!s.done);if(idx>=0)return{index:i,setIndex:idx}}return{index:Math.max(0,flow.length-1),setIndex:0}};
+  const openExercise=async(id:string)=>{if(isFuture)return;await ensureSession(true);const idx=flow.findIndex(i=>i.exercise.id===id||i.originalId===id);if(idx>=0){const rows=ensureRows(flow[idx]);const setIndex=Math.max(0,rows.findIndex(r=>!r.done));setActive({index:idx,setIndex:setIndex<0?0:setIndex})}};
 
   const startWorkout=async()=>{
     if(isFuture)return;
-    if(plan.kind==='rest'){
-      const s=await ensureSession(true);const done={...s,status:'completed' as const,completedAt:new Date().toISOString(),durationSeconds:0};
-      updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:done}}));void saveSession(done,0);setSummaryDate(dateKey);return;
-    }
-    if(plan.kind==='cardio'&&!session?.selectedCardio){setFinishOpen(false);setActive(null);return;}
-    await ensureSession(true);const next=firstIncomplete();setActive(next);ensureRows(flow[next.index]);
+    if(plan.kind==='rest'){await ensureSession(true);setFinishOpen(true);return;}
+    if(plan.kind==='cardio'&&!stateRef.current.sessions[dateKey]?.selectedCardio)return;
+    await ensureSession(true);const next=firstIncomplete();if(flow[next.index])ensureRows(flow[next.index]);setActive(next);
   };
 
   const selectCardio=async(id:string)=>{
-    const s=await ensureSession(false);const next={...s,selectedCardio:id};
-    updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));void saveSession(next,0);setTimeout(()=>void startWorkout(),50);
+    const s=await ensureSession(false);const next={...s,selectedCardio:id};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));try{const cid=await saveSession(next,0);if(cid&&!next.cloudId)updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:{...next,cloudId:cid}}}))}catch{setCloudState('offline')}
+    const ex=plan.main.find(x=>x.id===id);if(ex){const started={...stateRef.current.sessions[dateKey],status:'in_progress' as const,startedAt:stateRef.current.sessions[dateKey]?.startedAt||new Date().toISOString()};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:started}}));void saveSession(started,0);const item:FlowItem={exercise:ex,phase:'main',originalId:ex.id};ensureRows(item);setActive({index:0,setIndex:0})}
   };
 
-  const current=active?flow[active.index]:undefined;
-  const currentRows=current?(state.sets[dateKey]?.[current.exercise.id]||createSetRows(current.exercise,current.phase,state.settings.weightUnit)):[];
-  const currentSet=currentRows[active?.setIndex||0];
+  const current=active?flow[active.index]:undefined;const currentRows=current?(state.sets[dateKey]?.[current.exercise.id]||createSetRows(current.exercise,current.phase,state.settings.weightUnit)):[];const currentSet=currentRows[active?.setIndex||0];
 
   const completeCurrentSet=()=>{
-    if(!current||!currentSet||active===null)return;
-    const before=derivePRs(stateRef.current)[current.exercise.id];
-    const completed={...currentSet,done:!currentSet.done,loggedAt:new Date().toISOString()};
-    setRow(current,active.setIndex,completed);
-    if(!currentSet.done && currentSet.setType==='WORKING'){
-      const w=canonicalLb(Number(completed.weight),completed.weightUnit),r=Number(completed.reps);const one=epley(w,r);
-      if(w>0&&r>0&&( !before?.weight || w>before.weight.weight || one>(before.oneRM?.oneRM||0)))setCelebration(`New PR • ${completed.exerciseName} • ${completed.weight} ${completed.weightUnit} × ${completed.reps}`);
-      if(state.settings.autoRestTimer){setRestSeconds(state.settings.defaultRestSeconds);setRestRunning(true)}
-    }
-    if(!currentSet.done){
-      const nextSet=currentRows.findIndex((s,i)=>i>active.setIndex&&!s.done);
-      if(nextSet>=0)setActive({...active,setIndex:nextSet});
-      else if(active.index<flow.length-1){setActive({index:active.index+1,setIndex:0});ensureRows(flow[active.index+1]);}
-      else setFinishOpen(true);
-    }
+    if(!current||!currentSet||active===null)return;const before=derivePRs(stateRef.current)[current.exercise.id];const completed={...currentSet,done:!currentSet.done,loggedAt:new Date().toISOString()};setRow(current,active.setIndex,completed);
+    if(!currentSet.done&&currentSet.setType==='WORKING'){const w=canonicalLb(Number(completed.weight),completed.weightUnit),r=Number(completed.reps),one=epley(w,r);if(w>0&&r>0&&(!before?.weight||w>before.weight.weight||one>(before.oneRM?.oneRM||0)))setCelebration(`New PR • ${completed.exerciseName} • ${completed.weight} ${completed.weightUnit} × ${completed.reps}`);if(state.settings.autoRestTimer){setRestSeconds(state.settings.defaultRestSeconds);setRestRunning(true)}}
+    if(!currentSet.done){const nextSet=currentRows.findIndex((s,i)=>i>active.setIndex&&!s.done);if(nextSet>=0)setActive({...active,setIndex:nextSet});else if(active.index<flow.length-1){const i=active.index+1;ensureRows(flow[i]);setActive({index:i,setIndex:0})}else setFinishOpen(true)}
   };
 
-  const reducedVolume=()=>{
-    if(!current||active===null)return;
-    const rows=stateRef.current.sets[dateKey]?.[current.exercise.id]||createSetRows(current.exercise,current.phase,state.settings.weightUnit);
-    rows.forEach((row,i)=>{if(row.setNumber===3&&!row.done)setRow(current,i,{done:true,notes:'Reduced-volume skip',loggedAt:new Date().toISOString()})});
-    const first=rows.findIndex(r=>!r.done&&r.setNumber<3);setActive({...active,setIndex:first>=0?first:Math.max(0,rows.length-1)});
+  const addExtraSet=()=>{
+    if(!current||active===null)return;const rows=[...(stateRef.current.sets[dateKey]?.[current.exercise.id]||ensureRows(current))];const max=Math.max(0,...rows.map(r=>r.setNumber));const additions:createSetRows extends never?never: SetEntry[]=[];
+    const base={exerciseId:current.exercise.id,exerciseName:current.exercise.name,phase:current.phase,setNumber:max+1,weight:'',reps:'',done:false,setType:current.phase==='warmup'?'WARMUP':current.phase==='cooldown'?'COOLDOWN':(current.exercise.type==='strength'||current.exercise.type==='core'?'WORKING':'RECOVERY'),weightUnit:state.settings.weightUnit} as SetEntry;
+    if(current.exercise.unilateral){additions.push({...base,side:'R'},{...base,side:'L'})}else additions.push(base);
+    updateState(p=>({...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[current.exercise.id]:[...rows,...additions]}}}));setActive({...active,setIndex:rows.length});
   };
 
-  const finishWorkout=async(soreness:number,areas:Record<string,number>)=>{
-    const currentSession=await ensureSession(true);const started=currentSession.startedAt?new Date(currentSession.startedAt).getTime():Date.now();
-    const done:SessionEntry={...currentSession,status:'completed',completedAt:new Date().toISOString(),durationSeconds:Math.max(0,Math.round((Date.now()-started)/1000)),sorenessScore:soreness,sorenessAreas:areas};
-    updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:done}}));
-    try{const id=await saveSession(done,sessionVolume(stateRef.current,dateKey));if(id&&!done.cloudId)updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:{...done,cloudId:id}}}));}catch{setCloudState('offline')}
-    setFinishOpen(false);setActive(null);setSummaryDate(dateKey);setRestRunning(false);setRestSeconds(0);
+  const removeExtraSet=()=>{
+    if(!current||active===null)return;const rows=[...(stateRef.current.sets[dateKey]?.[current.exercise.id]||[])];const baseCount=current.exercise.unilateral?current.exercise.sets*2:current.exercise.sets;if(rows.length<=baseCount)return;const max=Math.max(...rows.map(r=>r.setNumber));const removed=rows.filter(r=>r.setNumber===max),kept=rows.filter(r=>r.setNumber!==max);removed.forEach(r=>{if(r.cloudId)void deleteSetLog(r.cloudId).catch(()=>setCloudState('offline'))});updateState(p=>({...p,sets:{...p.sets,[dateKey]:{...(p.sets[dateKey]||{}),[current.exercise.id]:kept}}}));setActive({...active,setIndex:Math.max(0,kept.length-1)});
   };
 
-  const saveSessionNotes=(notes:string)=>{
-    const s=stateRef.current.sessions[dateKey]||{date:dateKey,workoutType:plan.kind,status:'not_started' as const};const next={...s,notes};
-    updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));void saveSession(next,sessionVolume(stateRef.current,dateKey));setNotesOpen(false);
+  const reducedVolume=()=>{if(!current||active===null)return;const rows=stateRef.current.sets[dateKey]?.[current.exercise.id]||ensureRows(current);rows.forEach((row,i)=>{if(row.setNumber===3&&!row.done)setRow(current,i,{done:true,notes:'Reduced-volume skip',loggedAt:new Date().toISOString()})});const first=rows.findIndex(r=>!r.done&&r.setNumber<3);setActive({...active,setIndex:first>=0?first:Math.max(0,rows.length-1)})};
+
+  const finishWorkout=async(soreness:number,areas:Record<string,number>,notes:string)=>{
+    const currentSession=await ensureSession(true);const started=currentSession.startedAt?new Date(currentSession.startedAt).getTime():Date.now();const done:SessionEntry={...currentSession,status:'completed',completedAt:new Date().toISOString(),durationSeconds:Math.max(0,Math.round((Date.now()-started)/1000)),sorenessScore:soreness,sorenessAreas:areas,notes:notes||currentSession.notes};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:done}}));try{const id=await saveSession(done,sessionVolume(stateRef.current,dateKey));if(id&&!done.cloudId)updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:{...done,cloudId:id}}}))}catch{setCloudState('offline')}setFinishOpen(false);setActive(null);setSummaryDate(dateKey);setRestRunning(false);setRestSeconds(0);
   };
 
-  const saveMachine=(setting:MachineSetting)=>{
-    updateState(p=>({...p,machineSettings:{...p.machineSettings,[setting.exerciseId]:setting}}));
-    void saveMachineSetting(setting,state.settings.weightUnit).then(id=>{if(id)updateState(p=>({...p,machineSettings:{...p.machineSettings,[setting.exerciseId]:{...p.machineSettings[setting.exerciseId],cloudId:id}}}))}).catch(()=>setCloudState('offline'));
-    setMachineOpen(false);
-  };
+  const editCompleted=()=>{const s=stateRef.current.sessions[dateKey];if(!s)return;const next={...s,status:'partial' as const,completedAt:undefined};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));void saveSession(next,sessionVolume(stateRef.current,dateKey));setSummaryDate('');const nextPos=firstIncomplete();if(flow[nextPos.index])ensureRows(flow[nextPos.index]);setActive(nextPos)};
+  const saveSessionNotes=(notes:string)=>{const s=stateRef.current.sessions[dateKey]||{date:dateKey,workoutType:plan.kind,status:'not_started' as const};const next={...s,notes};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));void saveSession(next,sessionVolume(stateRef.current,dateKey));setNotesOpen(false)};
+  const saveMachine=(setting:MachineSetting)=>{updateState(p=>({...p,machineSettings:{...p.machineSettings,[setting.exerciseId]:setting}}));void saveMachineSetting(setting,state.settings.weightUnit).then(id=>{if(id)updateState(p=>({...p,machineSettings:{...p.machineSettings,[setting.exerciseId]:{...p.machineSettings[setting.exerciseId],cloudId:id}}}))}).catch(()=>setCloudState('offline'));setMachineOpen(false)};
+  const swapExercise=(replacement:string)=>{if(!current)return;const originalRows=stateRef.current.sets[dateKey]?.[current.exercise.id]||[];if(originalRows.some(r=>r.done)&&!confirm('This exercise already has completed sets. Replace it anyway? Completed history will remain saved.'))return;const s=stateRef.current.sessions[dateKey]||{date:dateKey,workoutType:plan.kind,status:'not_started' as const,substitutions:{}};const next={...s,substitutions:{...(s.substitutions||{}),[current.originalId]:replacement}};updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));void saveSession(next,sessionVolume(stateRef.current,dateKey));setSwapOpen(false);setActive(active?{...active,setIndex:0}:active)};
+  const updateSettings=(patch:Partial<AppState['settings']>)=>{const next={...state.settings,...patch};updateState(p=>({...p,settings:next}));void saveProfile(stateRef.current.profileCloudId,next).then(id=>{if(id)updateState(p=>({...p,profileCloudId:id}))}).catch(()=>setCloudState('offline'))};
 
-  const swapExercise=(replacement:string)=>{
-    if(!current)return;
-    const originalRows=stateRef.current.sets[dateKey]?.[current.exercise.id]||[];
-    if(originalRows.some(r=>r.done)&&!confirm('This exercise already has completed sets. Replace it anyway? The completed history will remain saved.'))return;
-    const s=stateRef.current.sessions[dateKey]||{date:dateKey,workoutType:plan.kind,status:'not_started' as const,substitutions:{}};
-    const next={...s,substitutions:{...(s.substitutions||{}),[current.originalId]:replacement}};
-    updateState(p=>({...p,sessions:{...p.sessions,[dateKey]:next}}));void saveSession(next,sessionVolume(stateRef.current,dateKey));setSwapOpen(false);setActive(active?{...active,setIndex:0}:active);
-  };
-
-  const updateSettings=(patch:Partial<AppState['settings']>)=>{
-    const next={...state.settings,...patch};updateState(p=>({...p,settings:next}));
-    void saveProfile(stateRef.current.profileCloudId,next).then(id=>{if(id)updateState(p=>({...p,profileCloudId:id}))}).catch(()=>setCloudState('offline'));
-  };
-
-  const exportData=()=>{
-    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=`jayfit-backup-${localDateKey()}.json`;a.click();URL.revokeObjectURL(url);
-  };
-  const importData=(file:File)=>{
-    const reader=new FileReader();reader.onload=async()=>{try{const parsed=JSON.parse(String(reader.result));if(!parsed.sessions||!parsed.sets||!parsed.settings)throw new Error();const next={...parsed,settings:{...DEFAULT_SETTINGS,...parsed.settings}} as AppState;updateState(()=>next);await uploadLocalState(next);await syncFromCloud();alert('Backup imported and synchronized.')}catch{alert('This is not a valid JayFit backup. No data was changed.')}};reader.readAsText(file);
-  };
+  const exportData=()=>{const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`jayfit-backup-${localDateKey()}.json`;a.click();URL.revokeObjectURL(url)};
+  const importData=(file:File)=>{const reader=new FileReader();reader.onload=async()=>{try{const parsed=JSON.parse(String(reader.result));if(!parsed.sessions||!parsed.sets||!parsed.settings)throw new Error();const next={...parsed,settings:{...DEFAULT_SETTINGS,...parsed.settings}} as AppState;updateState(()=>next);await uploadLocalState(next);await syncFromCloud();alert('Backup imported and synchronized.')}catch{alert('This is not a valid JayFit backup. No data was changed.')}};reader.readAsText(file)};
   const clearAll=async()=>{if(!confirm('Delete ALL JayFit workout history, PRs, settings and cloud records? This cannot be undone.'))return;try{await deleteCloudData();localStorage.removeItem('jayfit.state.v2');localStorage.removeItem('jayfit.logs');updateState(()=>({sessions:{},sets:{},machineSettings:{},settings:DEFAULT_SETTINGS}));setCloudState('synced')}catch{alert('Cloud deletion failed. Nothing else was changed.')}};
 
   if(active!==null&&current&&currentSet){
-    const previous=previousExerciseSets(state,dateKey,current.exercise.id,currentSet.side);
-    const suggestion=progressionSuggestion(state,dateKey,current.exercise);
-    const elapsed=session?.startedAt?Math.max(0,Math.floor((Date.now()-new Date(session.startedAt).getTime())/1000)):0;void tick;
-    return <WorkoutScreen item={current} rows={currentRows} activeSet={active.setIndex} elapsed={elapsed} restSeconds={restSeconds} restRunning={restRunning}
-      previous={previous} suggestion={suggestion} unit={state.settings.weightUnit} cloudState={cloudState} machine={state.machineSettings[current.exercise.id]}
-      onClose={()=>setActive(null)} onPrev={()=>{if(active.index>0){const i=active.index-1;setActive({index:i,setIndex:0});ensureRows(flow[i])}}}
-      onNext={()=>{if(active.index<flow.length-1){const i=active.index+1;setActive({index:i,setIndex:0});ensureRows(flow[i])}else setFinishOpen(true)}}
-      onPickSet={i=>setActive({...active,setIndex:i})} onSet={(patch,persist=true)=>setRow(current,active.setIndex,patch,persist)} onComplete={completeCurrentSet}
-      onRest={(s)=>{setRestSeconds(s);setRestRunning(s>0)}} onMachine={()=>setMachineOpen(true)} onNotes={()=>setNotesOpen(true)} onSwap={()=>setSwapOpen(true)}
-      onReduced={reducedVolume} beginner={state.settings.beginnerMode} position={`${active.index+1} / ${flow.length}`} phase={current.phase}/>
+    const previous=previousExerciseSets(state,dateKey,current.exercise.id,currentSet.side),suggestion=progressionSuggestion(state,dateKey,current.exercise);const elapsed=session?.startedAt?Math.max(0,Math.floor((Date.now()-new Date(session.startedAt).getTime())/1000)):0;void tick;
+    return <WorkoutScreen item={current} rows={currentRows} activeSet={active.setIndex} elapsed={elapsed} restSeconds={restSeconds} restRunning={restRunning} previous={previous} suggestion={suggestion} cloudState={cloudState} machine={state.machineSettings[current.exercise.id]}
+      onClose={()=>setActive(null)} onPrev={()=>{if(active.index>0){const i=active.index-1;ensureRows(flow[i]);setActive({index:i,setIndex:0})}}} onNext={()=>{if(active.index<flow.length-1){const i=active.index+1;ensureRows(flow[i]);setActive({index:i,setIndex:0})}else setFinishOpen(true)}} onPickSet={i=>setActive({...active,setIndex:i})}
+      onSet={(patch,persist=true)=>setRow(current,active.setIndex,patch,persist)} onComplete={completeCurrentSet} onRest={s=>{setRestSeconds(s);setRestRunning(s>0)}} onMachine={()=>setMachineOpen(true)} onNotes={()=>setNotesOpen(true)} onSwap={()=>setSwapOpen(true)} onReduced={reducedVolume} onAddSet={addExtraSet} onRemoveSet={removeExtraSet} beginner={state.settings.beginnerMode} position={`${active.index+1} / ${flow.length}`} phase={current.phase}/>
   }
 
-  const stats=monthlyStats(state,new Date());const prs=derivePRs(state);const prEvents=derivePREvents(state);const streak=weeklyStrengthStreak(state);
-  const latestPR=prEvents[0];
+  const stats=monthlyStats(state,new Date()),prEvents=derivePREvents(state),streak=weeklyStrengthStreak(state),latestPR=prEvents[0];
   return <div className="app-shell"><main className="page-shell">
-    {cloudState!=='synced'&&<div className={`sync-banner ${cloudState}`}>{cloudState==='offline'?<CloudOff/>:<RefreshCw className="spin"/>}<span>{cloudMessage}</span><button onClick={syncFromCloud}>Retry</button></div>}
-    {tab==='home'&&<HomePage dateKey={dateKey} state={state} plan={plan} completion={completion} stats={stats} streak={streak} latestPR={latestPR} isFuture={isFuture}
-      onStart={startWorkout} onDate={k=>{setDateKey(k);setCalendarCursor(parseLocalDate(k))}} onCardio={selectCardio} onSummary={()=>setSummaryDate(dateKey)}/>} 
+    {cloudState!=='synced'&&<div className={`sync-banner ${cloudState}`}>{cloudState==='offline'?<CloudOff/>:<RefreshCw className="spin"/>}<span>{cloudMessage}</span><button onClick={()=>void syncFromCloud()}>Retry</button></div>}
+    {tab==='home'&&<HomePage dateKey={dateKey} state={state} plan={plan} flow={flow} completion={completion} stats={stats} streak={streak} latestPR={latestPR} isFuture={isFuture} onStart={startWorkout} onDate={k=>{setDateKey(k);setCalendarCursor(parseLocalDate(k))}} onCardio={selectCardio} onSummary={()=>setSummaryDate(dateKey)} onExercise={openExercise}/>} 
     {tab==='week'&&<WeekPage state={state} selected={dateKey} onPick={k=>{setDateKey(k);setTab('home')}}/>}
     {tab==='calendar'&&<CalendarPage state={state} cursor={calendarCursor} setCursor={setCalendarCursor} onPick={k=>{setDateKey(k);setTab('home')}}/>}
     {tab==='prs'&&<PRPage state={state} exerciseFilter={prExercise} setExerciseFilter={setPrExercise} monthFilter={prMonth} setMonthFilter={setPrMonth} onHistory={setHistoryExercise}/>} 
@@ -279,114 +189,69 @@ export default function App({user,logout}:Props){
   {machineOpen&&current&&<MachineSheet setting={state.machineSettings[current.exercise.id]||{exerciseId:current.exercise.id}} exercise={current.exercise} onSave={saveMachine} onClose={()=>setMachineOpen(false)}/>} 
   {notesOpen&&<NotesSheet initial={state.sessions[dateKey]?.notes||''} onSave={saveSessionNotes} onClose={()=>setNotesOpen(false)}/>} 
   {swapOpen&&current&&<SwapSheet exercise={findExercise(current.originalId)||current.exercise} onSwap={swapExercise} onClose={()=>setSwapOpen(false)}/>} 
-  {finishOpen&&<FinishSheet onFinish={finishWorkout} onClose={()=>setFinishOpen(false)}/>} 
-  {summaryDate&&<SummarySheet date={summaryDate} state={state} onClose={()=>setSummaryDate('')}/>} 
+  {finishOpen&&<FinishSheet initialNotes={state.sessions[dateKey]?.notes||''} onFinish={finishWorkout} onClose={()=>setFinishOpen(false)}/>} 
+  {summaryDate&&<SummarySheet date={summaryDate} state={state} onClose={()=>setSummaryDate('')} onEdit={editCompleted}/>} 
   {historyExercise&&<HistorySheet exerciseId={historyExercise} state={state} onClose={()=>setHistoryExercise('')}/>} 
   </div>;
 }
 
 function Nav({active,icon,label,onClick}:{active:boolean;icon:any;label:string;onClick:()=>void}){return <button className={active?'active':''} onClick={onClick}>{icon}<span>{label}</span></button>}
+function formatVolume(v:number){if(v>=1000000)return`${(v/1000000).toFixed(1)}M`;if(v>=1000)return`${Math.round(v/1000)}k`;return Math.round(v).toString()}
+function fmtTime(sec:number){const m=Math.floor(sec/60),s=sec%60;return`${m}:${String(s).padStart(2,'0')}`}
+function Stat({label,value,sub}:{label:string;value:string;sub:string}){return <div className="stat"><small>{label}</small><strong>{value}</strong><span>{sub}</span></div>}
 
-function HomePage({dateKey,state,plan,completion,stats,streak,latestPR,isFuture,onStart,onDate,onCardio,onSummary}:{dateKey:string;state:AppState;plan:DayPlan;completion:any;stats:any;streak:number;latestPR:any;isFuture:boolean;onStart:()=>void;onDate:(k:string)=>void;onCardio:(id:string)=>void;onSummary:()=>void}){
-  const d=parseLocalDate(dateKey);const session=state.sessions[dateKey];const status=sessionStatusForDate(state,dateKey);
-  const today=new Date();const weekStart=new Date(today);weekStart.setDate(today.getDate()-((today.getDay()+6)%7));
-  const week=Array.from({length:7},(_,i)=>{const x=new Date(weekStart);x.setDate(weekStart.getDate()+i);return x});
-  const motivation=plan.kind==='rest'?'Recovery is training too.':plan.kind==='recovery'?'Move enough to recover. Save your effort for the next hard session.':'One clean set at a time. Progress compounds.';
-  const buttonLabel=session?.status==='completed'?'VIEW SUMMARY':session?.startedAt?'CONTINUE':'START';
+function HomePage({dateKey,state,plan,flow,completion,stats,streak,latestPR,isFuture,onStart,onDate,onCardio,onSummary,onExercise}:{dateKey:string;state:AppState;plan:DayPlan;flow:FlowItem[];completion:any;stats:any;streak:number;latestPR:any;isFuture:boolean;onStart:()=>void;onDate:(k:string)=>void;onCardio:(id:string)=>void;onSummary:()=>void;onExercise:(id:string)=>void}){
+  const d=parseLocalDate(dateKey),session=state.sessions[dateKey],status=sessionStatusForDate(state,dateKey),today=new Date(),weekStart=new Date(today);weekStart.setDate(today.getDate()-((today.getDay()+6)%7));const week=Array.from({length:7},(_,i)=>{const x=new Date(weekStart);x.setDate(weekStart.getDate()+i);return x});
+  const motivation=plan.kind==='rest'?'Recovery is training too.':plan.kind==='recovery'?'Move enough to recover. Save your effort for the next hard session.':'One clean set at a time. Progress compounds.';const buttonLabel=session?.status==='completed'?'VIEW SUMMARY':session?.startedAt?'CONTINUE':'START';
+  const expectedDays=new Date(d.getFullYear(),d.getMonth()+1,0).getDate();let scheduled=0,completed=0;for(let i=1;i<=expectedDays;i++){const k=localDateKey(new Date(d.getFullYear(),d.getMonth(),i));if(weeklyPlans[new Date(d.getFullYear(),d.getMonth(),i).getDay()].kind!=='rest'){scheduled++;if(state.sessions[k]?.status==='completed')completed++;}}const consistency=scheduled?Math.round(completed/scheduled*100):0;
   return <><header className="top"><div><small>{d.toLocaleDateString(undefined,{weekday:'long',month:'short',day:'numeric'}).toUpperCase()}</small><h1>JayFit</h1></div><div className="avatar">JD</div></header>
-    <section className={`hero-card ${plan.kind}`}><div className="hero-top"><span>{isFuture?'PLANNED':status.replace('_',' ').toUpperCase()}</span><span>{completion.percent}%</span></div><h2>{plan.title}</h2><p>{plan.subtitle}</p><div className="progress"><i style={{width:`${session?.status==='completed'?100:completion.percent}%`}}/></div>
-      {plan.kind==='cardio'&&!session?.selectedCardio&&!isFuture?<div className="cardio-picks">{plan.main.filter(e=>e.type==='cardio').map(ex=><button key={ex.id} onClick={()=>onCardio(ex.id)}>{ex.name}<small>{ex.reps}</small></button>)}</div>:
-      <button className="primary" disabled={isFuture} onClick={session?.status==='completed'?onSummary:onStart}>{isFuture?'FUTURE WORKOUT':buttonLabel} <ChevronRight/></button>}
+    <section className={`hero-card ${plan.kind}`}><div className="hero-top"><span>{isFuture?'PLANNED':status.replace('_',' ').toUpperCase()}</span><span>{session?.status==='completed'?100:completion.percent}%</span></div><h2>{plan.title}</h2><p>{plan.subtitle}</p><div className="progress"><i style={{width:`${session?.status==='completed'?100:completion.percent}%`}}/></div>
+      {plan.kind==='cardio'&&!session?.selectedCardio&&!isFuture?<div className="cardio-picks">{plan.main.filter(e=>e.type==='cardio').map(ex=><button key={ex.id} onClick={()=>onCardio(ex.id)}>{ex.name}<small>{ex.reps}</small></button>)}</div>:<button className="primary" disabled={isFuture} onClick={session?.status==='completed'?onSummary:onStart}>{isFuture?'FUTURE WORKOUT':buttonLabel}<ChevronRight/></button>}
     </section>
     <section className="motivation"><Flame/><div><strong>{motivation}</strong><p>{state.settings.beginnerMode?'Reduced-volume mode is available; keep 2–4 reps in reserve.':'Log clean reps, recover, then beat the previous version of yourself.'}</p></div></section>
-    <div className="stat-grid"><Stat label="Workouts" value={String(stats.strength)} sub="this month"/><Stat label="Volume" value={formatVolume(stats.volume)} sub="this month"/><Stat label="Streak" value={`${streak} wk`} sub="3-day weeks"/><Stat label="PR events" value={String(stats.prs)} sub="this month"/></div>
+    <div className="stat-grid"><Stat label="Workouts" value={String(stats.strength)} sub="lifting days this month"/><Stat label="Volume" value={formatVolume(stats.volume)} sub="lb-equivalent this month"/><Stat label="Streak" value={`${streak} wk`} sub="complete PPL weeks"/><Stat label="Consistency" value={`${consistency}%`} sub="scheduled activities"/></div>
     {latestPR&&<button className="latest-pr"><Trophy/><div><small>LATEST PR</small><strong>{latestPR.exerciseName}</strong><span>{Math.round(latestPR.weight)} lb × {latestPR.reps} • {latestPR.type}</span></div></button>}
+    {flow.length>0&&<><h3>Today's plan</h3><div className="exercise-carousel">{flow.map(item=><button key={`${item.phase}-${item.exercise.id}`} onClick={()=>onExercise(item.exercise.id)}><div><ExerciseVisual visual={item.exercise.visual} name={item.exercise.name} size="small"/></div><small>{item.phase.toUpperCase()}</small><strong>{item.exercise.name}</strong><span>{item.exercise.unilateral?'3 each side':`${item.exercise.sets} sets`} • {item.exercise.reps}</span></button>)}</div></>}
     <h3>This week</h3><div className="week-strip">{week.map(x=>{const k=localDateKey(x),p=weeklyPlans[x.getDay()],st=sessionStatusForDate(state,k);return <button key={k} className={`${k===dateKey?'today':''} ${st}`} onClick={()=>onDate(k)}><span>{x.toLocaleDateString(undefined,{weekday:'narrow'})}</span><b>{p.title.split(' ')[0]}</b><i/></button>})}</div>
     <section className="insight-card"><HeartPulse/><div><small>RECOVERY INSIGHT</small><strong>{recoveryInsight(state)}</strong></div></section>
   </>;
 }
 
-function Stat({label,value,sub}:{label:string;value:string;sub:string}){return <div className="stat"><small>{label}</small><strong>{value}</strong><span>{sub}</span></div>}
-function formatVolume(v:number){if(v>=1000000)return `${(v/1000000).toFixed(1)}M`;if(v>=1000)return `${Math.round(v/1000)}k`;return Math.round(v).toString()}
-function fmtTime(sec:number){const m=Math.floor(sec/60),s=sec%60;return `${m}:${String(s).padStart(2,'0')}`}
-
-function WorkoutScreen({item,rows,activeSet,elapsed,restSeconds,restRunning,previous,suggestion,unit,cloudState,machine,onClose,onPrev,onNext,onPickSet,onSet,onComplete,onRest,onMachine,onNotes,onSwap,onReduced,beginner,position,phase}:{item:FlowItem;rows:SetEntry[];activeSet:number;elapsed:number;restSeconds:number;restRunning:boolean;previous:SetEntry[];suggestion:any;unit:string;cloudState:string;machine?:MachineSetting;onClose:()=>void;onPrev:()=>void;onNext:()=>void;onPickSet:(i:number)=>void;onSet:(p:Partial<SetEntry>,persist?:boolean)=>void;onComplete:()=>void;onRest:(s:number)=>void;onMachine:()=>void;onNotes:()=>void;onSwap:()=>void;onReduced:()=>void;beginner:boolean;position:string;phase:Phase}){
-  const ex=item.exercise,set=rows[activeSet];const timed=['cardio','recovery','stretch','warmup'].includes(ex.type)&&ex.type!=='warmup'&&set.setType!=='WORKING';
-  const weightStep=unit==='kg'?2.5:5;const prior=previous[activeSet]||previous[previous.length-1];
-  const weight=Number(set.weight)||0,reps=Number(set.reps)||0;
+function WorkoutScreen({item,rows,activeSet,elapsed,restSeconds,restRunning,previous,suggestion,cloudState,machine,onClose,onPrev,onNext,onPickSet,onSet,onComplete,onRest,onMachine,onNotes,onSwap,onReduced,onAddSet,onRemoveSet,beginner,position,phase}:{item:FlowItem;rows:SetEntry[];activeSet:number;elapsed:number;restSeconds:number;restRunning:boolean;previous:SetEntry[];suggestion:any;cloudState:string;machine?:MachineSetting;onClose:()=>void;onPrev:()=>void;onNext:()=>void;onPickSet:(i:number)=>void;onSet:(p:Partial<SetEntry>,persist?:boolean)=>void;onComplete:()=>void;onRest:(s:number)=>void;onMachine:()=>void;onNotes:()=>void;onSwap:()=>void;onReduced:()=>void;onAddSet:()=>void;onRemoveSet:()=>void;beginner:boolean;position:string;phase:Phase}){
+  const ex=item.exercise,set=rows[activeSet],weighted=set.setType==='WORKING'||weightedWarmups.has(ex.id),timed=!!ex.timedMinutes||ex.type==='stretch',simple=!weighted;const unit=set.weightUnit,weightStep=unit==='kg'?2.5:5,prior=previous[activeSet]||previous[previous.length-1],weight=Number(set.weight)||0,reps=Number(set.reps)||0;
+  const working=rows.filter(r=>r.setType==='WORKING'&&r.done),totalVol=working.reduce((s,r)=>s+canonicalLb(Number(r.weight),r.weightUnit)*Number(r.reps||0),0),leftVol=working.filter(r=>r.side==='L').reduce((s,r)=>s+canonicalLb(Number(r.weight),r.weightUnit)*Number(r.reps||0),0),rightVol=working.filter(r=>r.side==='R').reduce((s,r)=>s+canonicalLb(Number(r.weight),r.weightUnit)*Number(r.reps||0),0),baseCount=ex.unilateral?ex.sets*2:ex.sets;
   return <main className="workout-screen"><header className="session-head"><button onClick={onClose}><X/></button><div><small>{phase.toUpperCase()} • {position}</small><strong>{fmtTime(elapsed)}</strong></div><span className={cloudState}>{cloudState==='synced'?<Cloud/>:<CloudOff/>}</span></header>
-    <div className="exercise-visual-large"><ExerciseVisual visual={ex.visual} name={ex.name}/></div>
-    <section className="exercise-title"><div className="type-line"><span>{ex.type.toUpperCase()}</span><span>{ex.unilateral?'3 SETS EACH SIDE':`${ex.sets} SETS`} • {ex.reps}</span></div><h1>{ex.name}</h1><p>{[...ex.primary,...(ex.secondary||[])].join(' • ')}</p>{ex.note&&<div className="note">{ex.note}</div>}</section>
+    <div className="exercise-visual-large"><ExerciseVisual visual={ex.visual} name={ex.name}/></div><section className="exercise-title"><div className="type-line"><span>{ex.type.toUpperCase()}</span><span>{ex.unilateral?'3 SETS EACH SIDE':`${ex.sets} SETS`} • {ex.reps}</span></div><h1>{ex.name}</h1><p>{[...ex.primary,...(ex.secondary||[])].join(' • ')}</p>{ex.note&&<div className="note">{ex.note}</div>}</section>
     <div className={`suggestion ${suggestion.tone}`}>{suggestion.tone==='up'?<TrendingUp/>:suggestion.tone==='down'?<TrendingDown/>:<Dumbbell/>}<div><strong>{suggestion.label}</strong><span>{suggestion.detail}</span></div></div>
     <div className="set-pills">{rows.map((r,i)=><button key={i} className={`${i===activeSet?'active':''} ${r.done?'done':''}`} onClick={()=>onPickSet(i)}>{r.side?`${r.side}${r.setNumber}`:r.setNumber}{r.done&&<Check/>}</button>)}</div>
     <section className="active-set-card"><div className="active-set-head"><div><small>{set.side?`${set.side==='R'?'RIGHT':'LEFT'} • `:''}SET {set.setNumber}</small><strong>{prior?.done?`Last: ${prior.weight||'—'} ${prior.weightUnit} × ${prior.reps||'—'}`:'Build your baseline'}</strong></div>{machine&&<button className="machine-chip" onClick={onMachine}>Machine saved</button>}</div>
-      {timed?<NumberControl label="MINUTES / REPS" value={reps} step={1} onChange={v=>onSet({reps:String(Math.max(0,v))},false)} onBlur={()=>onSet({reps:String(reps)})}/>:<div className="controls-grid"><NumberControl label={`WEIGHT (${unit})`} value={weight} step={weightStep} decimals onChange={v=>onSet({weight:String(Math.max(0,v))},false)} onBlur={()=>onSet({weight:String(weight)})}/><NumberControl label="REPS" value={reps} step={1} onChange={v=>onSet({reps:String(Math.max(0,v))},false)} onBlur={()=>onSet({reps:String(reps)})}/></div>}
-      <textarea className="set-note" placeholder="Optional set note…" value={set.notes||''} onChange={e=>onSet({notes:e.target.value},false)} onBlur={e=>onSet({notes:e.target.value})}/>
-      <button className={`complete-set ${set.done?'undo':''}`} onClick={onComplete}>{set.done?'UNDO SET':'COMPLETE SET'} <Check/></button>
+      {weighted?<div className="controls-grid"><NumberControl label={`WEIGHT (${unit})`} value={weight} step={weightStep} decimals onChange={v=>onSet({weight:String(Math.max(0,v))},false)} onCommit={v=>onSet({weight:String(v)})}/><NumberControl label="REPS" value={reps} step={1} onChange={v=>onSet({reps:String(Math.max(0,v))},false)} onCommit={v=>onSet({reps:String(v)})}/></div>:<NumberControl label={timed?(ex.type==='stretch'?'SECONDS / HOLD':'MINUTES / DURATION'):'REPS'} value={reps} step={1} onChange={v=>onSet({reps:String(Math.max(0,v))},false)} onCommit={v=>onSet({reps:String(v)})}/>} 
+      <textarea className="set-note" placeholder="Optional set note…" value={set.notes||''} onChange={e=>onSet({notes:e.target.value},false)} onBlur={e=>onSet({notes:e.target.value})}/><button className={`complete-set ${set.done?'undo':''}`} onClick={onComplete}>{set.done?'UNDO SET':'COMPLETE SET'}<Check/></button>
     </section>
+    {set.setType==='WORKING'&&<div className="volume-strip"><span><small>EXERCISE VOLUME</small><b>{Math.round(totalVol).toLocaleString()} lb</b></span>{ex.unilateral&&<><span><small>LEFT</small><b>{Math.round(leftVol).toLocaleString()}</b></span><span><small>RIGHT</small><b>{Math.round(rightVol).toLocaleString()}</b></span></>}</div>}
     {restSeconds>0&&<section className="rest-bar"><Timer/><div><small>REST TIMER</small><strong>{fmtTime(restSeconds)}</strong></div><div className="rest-actions"><button onClick={()=>onRest(60)}>60</button><button onClick={()=>onRest(90)}>90</button><button onClick={()=>onRest(120)}>120</button><button onClick={()=>onRest(0)}>{restRunning?'Skip':'Clear'}</button></div></section>}
-    <div className="workout-tools"><button onClick={onMachine}><SlidersHorizontal/>Machine</button><button onClick={onNotes}><NotebookPen/>Notes</button>{(ex.alternatives||[]).length>0&&<button onClick={onSwap}><RefreshCw/>Swap</button>}{beginner&&set.setType==='WORKING'&&<button onClick={onReduced}>2-set day</button>}</div>
-    <footer className="session-nav"><button onClick={onPrev}><ChevronLeft/> Previous</button><button onClick={onNext}>Next <ChevronRight/></button></footer>
+    <div className="workout-tools"><button onClick={onMachine}><SlidersHorizontal/>Machine</button><button onClick={onNotes}><NotebookPen/>Notes</button>{(ex.alternatives||[]).length>0&&<button onClick={onSwap}><RefreshCw/>Swap</button>}{beginner&&set.setType==='WORKING'&&<button onClick={onReduced}>2-set day</button>}<button onClick={onAddSet}><CirclePlus/>Set</button>{rows.length>baseCount&&<button onClick={onRemoveSet}><CircleMinus/>Set</button>}</div>
+    <footer className="session-nav"><button onClick={onPrev}><ChevronLeft/>Previous</button><button onClick={onNext}>Next<ChevronRight/></button></footer>
   </main>;
 }
 
-function NumberControl({label,value,step,onChange,onBlur,decimals=false}:{label:string;value:number;step:number;onChange:(n:number)=>void;onBlur:()=>void;decimals?:boolean}){return <div className="number-control"><small>{label}</small><div><button onClick={()=>{onChange(Math.max(0,value-step));setTimeout(onBlur,0)}}><Minus/></button><input inputMode={decimals?'decimal':'numeric'} value={value||''} placeholder="0" onChange={e=>onChange(Number(e.target.value)||0)} onBlur={onBlur}/><button onClick={()=>{onChange(value+step);setTimeout(onBlur,0)}}><Plus/></button></div></div>}
+function NumberControl({label,value,step,onChange,onCommit,decimals=false}:{label:string;value:number;step:number;onChange:(n:number)=>void;onCommit:(n:number)=>void;decimals?:boolean}){return <div className="number-control"><small>{label}</small><div><button onClick={()=>{const n=Math.max(0,value-step);onChange(n);onCommit(n)}}><Minus/></button><input inputMode={decimals?'decimal':'numeric'} value={value||''} placeholder="0" onChange={e=>onChange(Number(e.target.value)||0)} onBlur={e=>onCommit(Number(e.currentTarget.value)||0)}/><button onClick={()=>{const n=value+step;onChange(n);onCommit(n)}}><Plus/></button></div></div>}
 
-function WeekPage({state,selected,onPick}:{state:AppState;selected:string;onPick:(k:string)=>void}){
-  const anchor=parseLocalDate(selected),monday=new Date(anchor);monday.setDate(anchor.getDate()-((anchor.getDay()+6)%7));
-  return <><div className="page-heading"><small>YOUR REPEATABLE SYSTEM</small><h1>Weekly Plan</h1><p>Push → recover → pull → recover → legs → recover → rest.</p></div>
-  {dayOrder.map(day=>{const offset=(day+6)%7,d=new Date(monday);d.setDate(monday.getDate()+offset);const k=localDateKey(d),plan=weeklyPlans[day],status=sessionStatusForDate(state,k);const volume=sessionVolume(state,k);return <button className={`day-card ${status}`} key={k} onClick={()=>onPick(k)}><div className="day-visual"><ExerciseVisual visual={plan.kind==='push'?'chest-press':plan.kind==='pull'?'pulldown':plan.kind==='legs'?'leg-press':plan.kind==='rest'?'breathing':'cardio'} name={plan.title} size="small"/></div><div className="day-info"><small>{dayNames[day]} • {d.getDate()}</small><strong>{plan.title}</strong><span>{status.replace('_',' ')}{volume?` • ${formatVolume(volume)} lb volume`:''}</span></div><ChevronRight/></button>})}</>;
-}
+function WeekPage({state,selected,onPick}:{state:AppState;selected:string;onPick:(k:string)=>void}){const anchor=parseLocalDate(selected),monday=new Date(anchor);monday.setDate(anchor.getDate()-((anchor.getDay()+6)%7));return <><div className="page-heading"><small>YOUR REPEATABLE SYSTEM</small><h1>Weekly Plan</h1><p>Push → recover → pull → recover → legs → recover → rest.</p></div>{dayOrder.map(day=>{const offset=(day+6)%7,d=new Date(monday);d.setDate(monday.getDate()+offset);const k=localDateKey(d),plan=weeklyPlans[day],status=sessionStatusForDate(state,k),volume=sessionVolume(state,k);return <button className={`day-card ${status}`} key={k} onClick={()=>onPick(k)}><div className="day-visual"><ExerciseVisual visual={plan.kind==='push'?'chest-press':plan.kind==='pull'?'pulldown':plan.kind==='legs'?'leg-press':plan.kind==='rest'?'breathing':'cardio'} name={plan.title} size="small"/></div><div className="day-info"><small>{dayNames[day]} • {d.getDate()}</small><strong>{plan.title}</strong><span>{status.replace('_',' ')}{volume?` • ${formatVolume(volume)} lb volume`:''}</span></div><ChevronRight/></button>})}</>}
 
-function CalendarPage({state,cursor,setCursor,onPick}:{state:AppState;cursor:Date;setCursor:(d:Date)=>void;onPick:(k:string)=>void}){
-  const y=cursor.getFullYear(),m=cursor.getMonth(),first=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate();const stats=monthlyStats(state,cursor);
-  return <><div className="calendar-head"><button onClick={()=>setCursor(new Date(y,m-1,1))}><ChevronLeft/></button><div><small>TRAINING CALENDAR</small><h1>{cursor.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</h1></div><button onClick={()=>setCursor(new Date(y,m+1,1))}><ChevronRight/></button></div>
-    <div className="month-summary"><span><b>{stats.completed}</b>activities</span><span><b>{stats.strength}</b>lifting days</span><span><b>{stats.prs}</b>PR events</span></div>
-    <div className="calendar-grid">{['S','M','T','W','T','F','S'].map((x,i)=><small key={i}>{x}</small>)}{Array.from({length:first}).map((_,i)=><span key={`e${i}`}/>)}{Array.from({length:days},(_,i)=>{const d=new Date(y,m,i+1),k=localDateKey(d),status=sessionStatusForDate(state,k),p=weeklyPlans[d.getDay()];return <button key={k} className={`${status} ${k===localDateKey()?'today':''}`} onClick={()=>onPick(k)}><b>{i+1}</b><em>{p.kind==='recovery'?'REC':p.kind.slice(0,4).toUpperCase()}</em><i/></button>})}</div>
-    <div className="calendar-legend"><span><i className="completed"/>Completed</span><span><i className="partial"/>Partial</span><span><i className="missed"/>Missed</span><span><i className="future"/>Future</span></div>
-  </>;
-}
+function CalendarPage({state,cursor,setCursor,onPick}:{state:AppState;cursor:Date;setCursor:(d:Date)=>void;onPick:(k:string)=>void}){const y=cursor.getFullYear(),m=cursor.getMonth(),first=new Date(y,m,1).getDay(),days=new Date(y,m+1,0).getDate(),stats=monthlyStats(state,cursor);let scheduled=0,completed=0;for(let i=1;i<=days;i++){const d=new Date(y,m,i),p=weeklyPlans[d.getDay()];if(p.kind!=='rest'){scheduled++;if(state.sessions[localDateKey(d)]?.status==='completed')completed++;}}const consistency=scheduled?Math.round(completed/scheduled*100):0;return <><div className="calendar-head"><button onClick={()=>setCursor(new Date(y,m-1,1))}><ChevronLeft/></button><div><small>TRAINING CALENDAR</small><h1>{cursor.toLocaleDateString(undefined,{month:'long',year:'numeric'})}</h1></div><button onClick={()=>setCursor(new Date(y,m+1,1))}><ChevronRight/></button></div><div className="month-summary"><span><b>{stats.completed}</b>activities</span><span><b>{stats.strength}</b>lifting days</span><span><b>{consistency}%</b>consistency</span></div><div className="calendar-grid">{['S','M','T','W','T','F','S'].map((x,i)=><small key={i}>{x}</small>)}{Array.from({length:first}).map((_,i)=><span key={`e${i}`}/>)}{Array.from({length:days},(_,i)=>{const d=new Date(y,m,i+1),k=localDateKey(d),status=sessionStatusForDate(state,k),p=weeklyPlans[d.getDay()];return <button key={k} className={`${status} ${k===localDateKey()?'today':''}`} onClick={()=>onPick(k)}><b>{i+1}</b><em>{p.kind==='recovery'?'REC':p.kind.slice(0,4).toUpperCase()}</em><i/></button>})}</div><div className="calendar-legend"><span><i className="completed"/>Completed</span><span><i className="partial"/>Partial</span><span><i className="missed"/>Missed</span><span><i className="future"/>Future</span></div></>}
 
-function PRPage({state,exerciseFilter,setExerciseFilter,monthFilter,setMonthFilter,onHistory}:{state:AppState;exerciseFilter:string;setExerciseFilter:(s:string)=>void;monthFilter:string;setMonthFilter:(s:string)=>void;onHistory:(s:string)=>void}){
-  const prs=derivePRs(state);const allEvents=derivePREvents(state);const exercises=Object.values(prs).map((_:any)=>_).length?Object.keys(prs):[];
-  const events=allEvents.filter(e=>(exerciseFilter==='all'||e.exerciseId===exerciseFilter)&&(monthFilter==='all'||e.date.startsWith(monthFilter)));
-  const months=[...new Set(allEvents.map(e=>e.date.slice(0,7)))].sort().reverse();
-  const rows=Object.entries(prs).filter(([id])=>exerciseFilter==='all'||id===exerciseFilter);
-  return <><div className="page-heading"><small>PROGRESS, NOT GUESSWORK</small><h1>Personal Records</h1><p>Weight, volume, rep and estimated-strength records are calculated from completed working sets only.</p></div>
-    <div className="filter-row"><select value={exerciseFilter} onChange={e=>setExerciseFilter(e.target.value)}><option value="all">All exercises</option>{exercises.map(id=><option key={id} value={id}>{prs[id].weight?.exerciseName||id}</option>)}</select><select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}><option value="all">All time</option>{months.map(m=><option key={m}>{m}</option>)}</select></div>
-    {rows.length?rows.map(([id,p]:any)=>{const plateau=plateauStatus(state,id);return <button className="pr-summary-card" key={id} onClick={()=>onHistory(id)}><div className="pr-icon"><Trophy/></div><div className="pr-main"><strong>{p.weight?.exerciseName||id}</strong><div className="pr-metrics"><span><small>MAX</small><b>{p.weight?`${Math.round(p.weight.weight)} lb × ${p.weight.reps}`:'—'}</b></span><span><small>VOLUME</small><b>{p.volume?Math.round(p.volume.volume).toLocaleString():'—'}</b></span><span><small>EST 1RM</small><b>{p.oneRM?`${Math.round(p.oneRM.oneRM)} lb`:'—'}</b></span></div>{(p.left||p.right)&&<small className="balance">L {p.left?Math.round(p.left.oneRM.oneRM):'—'} • R {p.right?Math.round(p.right.oneRM.oneRM):'—'} estimated 1RM</small>}<small className={plateau.plateau?'plateau':'progressing'}>{plateau.plateau?'Plateau watch':'Progressing'} • {plateau.detail}</small></div><ChevronRight/></button>}) : <div className="empty"><Trophy/><strong>Your PR board starts with your first completed working set.</strong></div>}
-    <h3>PR timeline</h3><div className="timeline">{events.slice(0,40).map((e,i)=><div className="timeline-row" key={`${e.date}-${e.exerciseId}-${e.type}-${i}`}><i/><div><small>{e.date} • {e.type.toUpperCase()}</small><strong>{e.exerciseName}{e.side?` • ${e.side}`:''}</strong><span>{Math.round(e.weight)} lb × {e.reps} • est 1RM {Math.round(e.oneRM)} lb</span></div></div>)}</div>
-  </>;
-}
+function PRPage({state,exerciseFilter,setExerciseFilter,monthFilter,setMonthFilter,onHistory}:{state:AppState;exerciseFilter:string;setExerciseFilter:(s:string)=>void;monthFilter:string;setMonthFilter:(s:string)=>void;onHistory:(s:string)=>void}){const prs=derivePRs(state),allEvents=derivePREvents(state),exercises=Object.keys(prs),events=allEvents.filter(e=>(exerciseFilter==='all'||e.exerciseId===exerciseFilter)&&(monthFilter==='all'||e.date.startsWith(monthFilter))),months=[...new Set(allEvents.map(e=>e.date.slice(0,7)))].sort().reverse(),rows=Object.entries(prs).filter(([id])=>exerciseFilter==='all'||id===exerciseFilter);return <><div className="page-heading"><small>PROGRESS, NOT GUESSWORK</small><h1>Personal Records</h1><p>Weight, volume, rep and estimated-strength records come from completed working sets only.</p></div><div className="filter-row"><select value={exerciseFilter} onChange={e=>setExerciseFilter(e.target.value)}><option value="all">All exercises</option>{exercises.map(id=><option key={id} value={id}>{prs[id].weight?.exerciseName||id}</option>)}</select><select value={monthFilter} onChange={e=>setMonthFilter(e.target.value)}><option value="all">All time</option>{months.map(m=><option key={m}>{m}</option>)}</select></div>{rows.length?rows.map(([id,p]:any)=>{const plateau=plateauStatus(state,id);return <button className="pr-summary-card" key={id} onClick={()=>onHistory(id)}><div className="pr-icon"><Trophy/></div><div className="pr-main"><strong>{p.weight?.exerciseName||id}</strong><div className="pr-metrics"><span><small>MAX</small><b>{p.weight?`${Math.round(p.weight.weight)} lb × ${p.weight.reps}`:'—'}</b></span><span><small>VOLUME</small><b>{p.volume?Math.round(p.volume.volume).toLocaleString():'—'}</b></span><span><small>EST 1RM</small><b>{p.oneRM?`${Math.round(p.oneRM.oneRM)} lb`:'—'}</b></span></div>{(p.left||p.right)&&<small className="balance">L {p.left?Math.round(p.left.oneRM):'—'} • R {p.right?Math.round(p.right.oneRM):'—'} estimated 1RM</small>}<small className={plateau.plateau?'plateau':'progressing'}>{plateau.plateau?'Plateau watch':'Progressing'} • {plateau.detail}</small></div><ChevronRight/></button>}):<div className="empty"><Trophy/><strong>Your PR board starts with your first completed working set.</strong></div>}<h3>PR timeline</h3><div className="timeline">{events.slice(0,40).map((e,i)=><div className="timeline-row" key={`${e.date}-${e.exerciseId}-${e.type}-${i}`}><i/><div><small>{e.date} • {e.type.toUpperCase()}</small><strong>{e.exerciseName}{e.side?` • ${e.side}`:''}</strong><span>{Math.round(e.weight)} lb × {e.reps} • est 1RM {Math.round(e.oneRM)} lb</span></div></div>)}</div></>}
 
-function SettingsPage({state,section,setSection,onSettings,onExport,onImport,onClear,onLogout,cloudState}:{state:AppState;section:string;setSection:(s:any)=>void;onSettings:(p:any)=>void;onExport:()=>void;onImport:()=>void;onClear:()=>void;onLogout:()=>void;cloudState:string}){
-  return <><div className="page-heading"><small>MAKE IT YOURS</small><h1>Settings</h1><p>JayFit stays simple during workouts; deeper controls live here.</p></div><div className="segmented"><button className={section==='general'?'active':''} onClick={()=>setSection('general')}>General</button><button className={section==='routine'?'active':''} onClick={()=>setSection('routine')}>Routine</button><button className={section==='data'?'active':''} onClick={()=>setSection('data')}>Data</button></div>
-  {section==='general'&&<><SettingRow title="Weight unit" detail="Existing set records retain the unit they were logged with."><div className="mini-toggle"><button className={state.settings.weightUnit==='lb'?'active':''} onClick={()=>onSettings({weightUnit:'lb'})}>lb</button><button className={state.settings.weightUnit==='kg'?'active':''} onClick={()=>onSettings({weightUnit:'kg'})}>kg</button></div></SettingRow>
-    <SettingRow title="Default rest timer" detail="Automatically starts after a completed working set."><select value={state.settings.defaultRestSeconds} onChange={e=>onSettings({defaultRestSeconds:Number(e.target.value)})}><option value="60">60 sec</option><option value="90">90 sec</option><option value="120">120 sec</option></select></SettingRow>
-    <SettingRow title="Auto rest timer" detail="Quick buttons remain available even when this is off."><input type="checkbox" checked={state.settings.autoRestTimer} onChange={e=>onSettings({autoRestTimer:e.target.checked})}/></SettingRow>
-    <SettingRow title="Beginner / reduced-volume option" detail="Keeps the programmed 3 sets, but lets you finish an exercise after 2 sets on high-soreness days."><input type="checkbox" checked={state.settings.beginnerMode} onChange={e=>onSettings({beginnerMode:e.target.checked})}/></SettingRow>
-    <section className="safety-card"><HeartPulse/><div><strong>Recovery rule</strong><p>Normal post-training soreness can last about 24–72 hours. Sharp pain, significant joint pain, swelling, numbness, tingling, or worsening pain is a reason to stop and reassess rather than chase the workout.</p></div></section></>}
-  {section==='routine'&&<RoutineEditor state={state} onSettings={onSettings}/>} 
-  {section==='data'&&<><section className="cloud-card"><div className={cloudState}><Cloud/></div><div><strong>{cloudState==='synced'?'Cloud sync active':'Cloud sync needs attention'}</strong><p>Authentication: AWS Cognito • Data: AppSync + DynamoDB • Local cache remains available for resilience.</p><small>{state.lastSyncAt?`Last sync ${new Date(state.lastSyncAt).toLocaleString()}`:'Not synced yet'}</small></div></section>
-    <button className="settings-action" onClick={onExport}><Download/>Export JSON backup</button><button className="settings-action" onClick={onImport}><Upload/>Import JSON backup</button><button className="settings-action danger" onClick={onClear}><Trash2/>Delete all local + cloud data</button><button className="settings-action" onClick={onLogout}><LogOut/>Sign out</button></>}
-  </>;
-}
+function SettingsPage({state,section,setSection,onSettings,onExport,onImport,onClear,onLogout,cloudState}:{state:AppState;section:string;setSection:(s:any)=>void;onSettings:(p:any)=>void;onExport:()=>void;onImport:()=>void;onClear:()=>void;onLogout:()=>void;cloudState:string}){return <><div className="page-heading"><small>MAKE IT YOURS</small><h1>Settings</h1><p>JayFit stays simple during workouts; deeper controls live here.</p></div><div className="segmented"><button className={section==='general'?'active':''} onClick={()=>setSection('general')}>General</button><button className={section==='routine'?'active':''} onClick={()=>setSection('routine')}>Routine</button><button className={section==='data'?'active':''} onClick={()=>setSection('data')}>Data</button></div>{section==='general'&&<><SettingRow title="Weight unit" detail="Existing set records keep the unit they were originally logged with."><div className="mini-toggle"><button className={state.settings.weightUnit==='lb'?'active':''} onClick={()=>onSettings({weightUnit:'lb'})}>lb</button><button className={state.settings.weightUnit==='kg'?'active':''} onClick={()=>onSettings({weightUnit:'kg'})}>kg</button></div></SettingRow><SettingRow title="Default rest timer" detail="Automatically starts after a completed working set."><select value={state.settings.defaultRestSeconds} onChange={e=>onSettings({defaultRestSeconds:Number(e.target.value)})}><option value="60">60 sec</option><option value="90">90 sec</option><option value="120">120 sec</option></select></SettingRow><SettingRow title="Auto rest timer" detail="Quick rest buttons remain available when this is off."><input type="checkbox" checked={state.settings.autoRestTimer} onChange={e=>onSettings({autoRestTimer:e.target.checked})}/></SettingRow><SettingRow title="Beginner / reduced-volume option" detail="Keeps the programmed 3 sets, but lets you finish an exercise after 2 sets on high-soreness days."><input type="checkbox" checked={state.settings.beginnerMode} onChange={e=>onSettings({beginnerMode:e.target.checked})}/></SettingRow><section className="safety-card"><HeartPulse/><div><strong>Recovery rule</strong><p>Normal post-training soreness can last about 24–72 hours. Sharp pain, significant joint pain, swelling, numbness, tingling, or worsening pain is a reason to stop and reassess rather than chase the workout.</p></div></section></>}{section==='routine'&&<RoutineEditor state={state} onSettings={onSettings}/>} {section==='data'&&<><section className="cloud-card"><div className={cloudState}><Cloud/></div><div><strong>{cloudState==='synced'?'Cloud sync active':'Cloud sync needs attention'}</strong><p>Authentication: AWS Cognito • Data: AppSync + DynamoDB • local cache remains available for resilience.</p><small>{state.lastSyncAt?`Last sync ${new Date(state.lastSyncAt).toLocaleString()}`:'Not synced yet'}</small></div></section><button className="settings-action" onClick={onExport}><Download/>Export JSON backup</button><button className="settings-action" onClick={onImport}><Upload/>Import JSON backup</button><button className="settings-action danger" onClick={onClear}><Trash2/>Delete all local + cloud data</button><button className="settings-action" onClick={onLogout}><LogOut/>Sign out</button></>}</>}
 function SettingRow({title,detail,children}:{title:string;detail:string;children:any}){return <div className="setting-row"><div><strong>{title}</strong><p>{detail}</p></div>{children}</div>}
+function RoutineEditor({state,onSettings}:{state:AppState;onSettings:(p:any)=>void}){const overrides=state.settings.routineOverrides,set=(id:string,patch:any)=>onSettings({routineOverrides:{...overrides,[id]:{...(overrides[id]||{}),...patch}}}),move=(day:number,id:string,dir:-1|1)=>{const list=[...weeklyPlans[day].main].sort((a,b)=>(overrides[a.id]?.order??999)-(overrides[b.id]?.order??999)),idx=list.findIndex(e=>e.id===id),swap=idx+dir;if(swap<0||swap>=list.length)return;[list[idx],list[swap]]=[list[swap],list[idx]];const next={...overrides};list.forEach((e,i)=>next[e.id]={...(next[e.id]||{}),order:i});onSettings({routineOverrides:next})};return <div className="routine-editor"><p className="editor-note">Defaults remain three working sets. Changes affect future plans only; historical sessions retain their recorded sets.</p>{[1,3,5].map(day=><section key={day}><h3>{weeklyPlans[day].title}</h3>{[...weeklyPlans[day].main].sort((a,b)=>(overrides[a.id]?.order??999)-(overrides[b.id]?.order??999)).map(ex=>{const o=overrides[ex.id]||{};return <div className="routine-row" key={ex.id}><div><strong>{ex.name}</strong><small>{ex.primary.join(' • ')}</small></div><div className="routine-actions"><button onClick={()=>move(day,ex.id,-1)}><ChevronUp/></button><button onClick={()=>move(day,ex.id,1)}><ChevronDown/></button><input aria-label="sets" type="number" min="1" max="6" value={o.sets??ex.sets} onChange={e=>set(ex.id,{sets:Number(e.target.value)})}/><input aria-label="reps" value={o.reps??ex.reps} onChange={e=>set(ex.id,{reps:e.target.value})}/><input aria-label="enabled" type="checkbox" checked={o.enabled!==false} onChange={e=>set(ex.id,{enabled:e.target.checked})}/></div></div>})}</section>)}</div>}
 
-function RoutineEditor({state,onSettings}:{state:AppState;onSettings:(p:any)=>void}){
-  const overrides=state.settings.routineOverrides;
-  const set=(id:string,patch:any)=>onSettings({routineOverrides:{...overrides,[id]:{...(overrides[id]||{}),...patch}}});
-  const move=(day:number,id:string,dir:-1|1)=>{const list=weeklyPlans[day].main;const idx=list.findIndex(e=>e.id===id),swap=idx+dir;if(swap<0||swap>=list.length)return;const copy=[...list];[copy[idx],copy[swap]]=[copy[swap],copy[idx]];const next={...overrides};copy.forEach((e,i)=>next[e.id]={...(next[e.id]||{}),order:i});onSettings({routineOverrides:next})};
-  return <div className="routine-editor"><p className="editor-note">Defaults remain three working sets. Changes here affect future plans only; historical sessions keep their saved records.</p>{[1,3,5].map(day=><section key={day}><h3>{weeklyPlans[day].title}</h3>{weeklyPlans[day].main.map(ex=>{const o=overrides[ex.id]||{};return <div className="routine-row" key={ex.id}><div><strong>{ex.name}</strong><small>{ex.primary.join(' • ')}</small></div><div className="routine-actions"><button onClick={()=>move(day,ex.id,-1)}><ChevronUp/></button><button onClick={()=>move(day,ex.id,1)}><ChevronDown/></button><input aria-label="sets" type="number" min="1" max="6" value={o.sets??ex.sets} onChange={e=>set(ex.id,{sets:Number(e.target.value)})}/><input aria-label="reps" value={o.reps??ex.reps} onChange={e=>set(ex.id,{reps:e.target.value})}/><input aria-label="enabled" type="checkbox" checked={o.enabled!==false} onChange={e=>set(ex.id,{enabled:e.target.checked})}/></div></div>})}</section>)}</div>;
-}
-
-function MachineSheet({setting,exercise,onSave,onClose}:{setting:MachineSetting;exercise:Exercise;onSave:(s:MachineSetting)=>void;onClose:()=>void}){const [form,setForm]=useState(setting);return <Sheet title="Machine setup" onClose={onClose}><div className="sheet-exercise"><ExerciseVisual visual={exercise.visual} name={exercise.name} size="small"/><div><strong>{exercise.name}</strong><p>Save the setup once; reuse it every session.</p></div></div><div className="form-grid">{[['seat','Seat'],['backrest','Backrest'],['handle','Handle'],['machine','Machine #'],['pin','Pin / stack'],['preferredWeight','Preferred start']].map(([key,label])=><label key={key}>{label}<input value={(form as any)[key]||''} onChange={e=>setForm({...form,[key]:e.target.value})}/></label>)}</div><label className="full-label">Exercise notes<textarea value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Example: seat 4, shoulders down…"/></label><button className="primary" onClick={()=>onSave(form)}>SAVE MACHINE SETUP</button></Sheet>}
+function MachineSheet({setting,exercise,onSave,onClose}:{setting:MachineSetting;exercise:Exercise;onSave:(s:MachineSetting)=>void;onClose:()=>void}){const [form,setForm]=useState(setting);return <Sheet title="Machine setup" onClose={onClose}><div className="sheet-exercise"><div className="mini-visual"><ExerciseVisual visual={exercise.visual} name={exercise.name} size="small"/></div><div><strong>{exercise.name}</strong><p>Save the setup once; reuse it every session.</p></div></div><div className="form-grid">{[['seat','Seat'],['backrest','Backrest'],['handle','Handle'],['machine','Machine #'],['pin','Pin / stack'],['preferredWeight','Preferred start']].map(([key,label])=><label key={key}>{label}<input value={(form as any)[key]||''} onChange={e=>setForm({...form,[key]:e.target.value})}/></label>)}</div><label className="full-label">Exercise notes<textarea value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})} placeholder="Example: seat 4, shoulders down…"/></label><button className="primary" onClick={()=>onSave(form)}>SAVE MACHINE SETUP</button></Sheet>}
 function NotesSheet({initial,onSave,onClose}:{initial:string;onSave:(s:string)=>void;onClose:()=>void}){const [v,setV]=useState(initial);return <Sheet title="Workout notes" onClose={onClose}><textarea className="big-textarea" value={v} onChange={e=>setV(e.target.value)} placeholder="Energy, technique, equipment, anything worth remembering…"/><button className="primary" onClick={()=>onSave(v)}>SAVE NOTES</button></Sheet>}
-function SwapSheet({exercise,onSwap,onClose}:{exercise:Exercise;onSwap:(s:string)=>void;onClose:()=>void}){return <Sheet title="Substitute this session" onClose={onClose}><p className="sheet-copy">The standard routine stays unchanged. Only this dated session uses the replacement.</p>{(exercise.alternatives||[]).map(a=><button className="swap-option" key={a} onClick={()=>onSwap(a)}><RefreshCw/><span><strong>{a}</strong><small>Targets the same primary movement pattern</small></span><ChevronRight/></button>)}</Sheet>}
-function FinishSheet({onFinish,onClose}:{onFinish:(s:number,a:Record<string,number>)=>void;onClose:()=>void}){const [score,setScore]=useState(0);const [areas,setAreas]=useState<Record<string,number>>({});return <Sheet title="Finish workout" onClose={onClose}><p className="sheet-copy">Log recovery information now so future recommendations have context.</p><h3>Overall soreness</h3><div className="score-row">{[0,1,2,3].map(n=><button className={score===n?'active':''} key={n} onClick={()=>setScore(n)}><b>{n}</b><small>{['None','Mild','Moderate','High'][n]}</small></button>)}</div><h3>Muscle soreness</h3><div className="area-grid">{sorenessAreas.map(a=><button key={a} className={(areas[a]||0)>0?'active':''} onClick={()=>setAreas({...areas,[a]:((areas[a]||0)+1)%4})}>{a}<b>{areas[a]||0}</b></button>)}</div><button className="primary" onClick={()=>onFinish(score,areas)}>FINISH & SAVE ONLINE</button></Sheet>}
+function SwapSheet({exercise,onSwap,onClose}:{exercise:Exercise;onSwap:(s:string)=>void;onClose:()=>void}){return <Sheet title="Substitute this session" onClose={onClose}><p className="sheet-copy">The standard routine stays unchanged. Only this dated session uses the replacement.</p>{(exercise.alternatives||[]).map(a=><button className="swap-option" key={a} onClick={()=>onSwap(a)}><RefreshCw/><span><strong>{a}</strong><small>Same primary movement pattern</small></span><ChevronRight/></button>)}</Sheet>}
+function FinishSheet({initialNotes,onFinish,onClose}:{initialNotes:string;onFinish:(s:number,a:Record<string,number>,notes:string)=>void;onClose:()=>void}){const [score,setScore]=useState(0),[areas,setAreas]=useState<Record<string,number>>({}),[notes,setNotes]=useState(initialNotes);return <Sheet title="Finish workout" onClose={onClose}><p className="sheet-copy">Log recovery information so future recommendations have context.</p><h3>Overall soreness</h3><div className="score-row">{[0,1,2,3].map(n=><button className={score===n?'active':''} key={n} onClick={()=>setScore(n)}><b>{n}</b><small>{['None','Mild','Moderate','High'][n]}</small></button>)}</div><h3>Muscle soreness</h3><div className="area-grid">{sorenessAreas.map(a=><button key={a} className={(areas[a]||0)>0?'active':''} onClick={()=>setAreas({...areas,[a]:((areas[a]||0)+1)%4})}>{a}<b>{areas[a]||0}</b></button>)}</div><label className="full-label">Session notes<textarea value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Energy, pain-free range, machine availability, anything notable…"/></label><button className="primary" onClick={()=>onFinish(score,areas,notes)}>FINISH & SAVE ONLINE</button></Sheet>}
 
-function SummarySheet({date,state,onClose}:{date:string;state:AppState;onClose:()=>void}){const s=state.sessions[date],volume=sessionVolume(state,date),rows=Object.values(state.sets[date]||{}).flat(),working=rows.filter(r=>r.setType==='WORKING'&&r.done),events=derivePREvents(state).filter(e=>e.date===date);const previousSame=Object.keys(state.sessions).filter(d=>d<date&&state.sessions[d].workoutType===s?.workoutType&&state.sessions[d].status==='completed').sort().reverse()[0];const prevVol=previousSame?sessionVolume(state,previousSame):0;const delta=prevVol?Math.round((volume-prevVol)/prevVol*100):0;return <div className="full-modal summary"><button className="modal-close" onClick={onClose}><X/></button><div className="summary-medal"><Trophy/></div><small>SESSION COMPLETE</small><h1>{weeklyPlans[parseLocalDate(date).getDay()].title}</h1><p>{date}</p><div className="summary-grid"><Stat label="Duration" value={fmtTime(s?.durationSeconds||0)} sub="training time"/><Stat label="Working sets" value={String(working.length)} sub="completed"/><Stat label="Volume" value={`${formatVolume(volume)} lb`} sub="working sets"/><Stat label="PR events" value={String(events.length)} sub="today"/></div>{previousSame&&<div className={`comparison ${delta>=0?'up':'down'}`}>{delta>=0?<TrendingUp/>:<TrendingDown/>}<strong>{delta>=0?'+':''}{delta}% volume vs previous {s.workoutType} session</strong></div>}{events.slice(0,3).map((e,i)=><div className="summary-pr" key={i}><Trophy/><span><strong>{e.exerciseName}</strong><small>{e.type} PR • {Math.round(e.weight)} lb × {e.reps}</small></span></div>)}<div className="summary-quote">Consistency wins when the next session is recoverable.</div><button className="primary" onClick={onClose}>DONE</button></div>}
-
-function HistorySheet({exerciseId,state,onClose}:{exerciseId:string;state:AppState;onClose:()=>void}){const history=exerciseHistory(state,exerciseId);const ex=findExercise(exerciseId);const points=history.map(h=>Math.max(0,...h.sets.map(s=>epley(canonicalLb(Number(s.weight),s.weightUnit),Number(s.reps)))));const max=Math.max(1,...points);return <Sheet title="Exercise history" onClose={onClose}><div className="history-head"><div className="mini-visual"><ExerciseVisual visual={ex?.visual||'cardio'} name={ex?.name||exerciseId}/></div><div><strong>{ex?.name||history[0]?.sets[0]?.exerciseName||exerciseId}</strong><p>{history.length} logged sessions</p></div></div>{points.length>1&&<svg className="sparkline" viewBox="0 0 300 100" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" strokeWidth="4" points={points.map((p,i)=>`${i*(300/(points.length-1))},${92-p/max*80}`).join(' ')}/></svg>}<div className="history-list">{history.slice().reverse().map(h=><div key={h.date}><small>{h.date}</small><strong>{h.sets.map(s=>`${s.weight}${s.weightUnit}×${s.reps}${s.side?` ${s.side}`:''}`).join(' • ')}</strong></div>)}</div></Sheet>}
-
+function SummarySheet({date,state,onClose,onEdit}:{date:string;state:AppState;onClose:()=>void;onEdit:()=>void}){const s=state.sessions[date],volume=sessionVolume(state,date),all=state.sets[date]||{},rows=Object.values(all).flat(),working=rows.filter(r=>r.setType==='WORKING'&&r.done),events=derivePREvents(state).filter(e=>e.date===date),previousSame=Object.keys(state.sessions).filter(d=>d<date&&state.sessions[d].workoutType===s?.workoutType&&state.sessions[d].status==='completed').sort().reverse()[0],prevVol=previousSame?sessionVolume(state,previousSame):0,delta=prevVol?Math.round((volume-prevVol)/prevVol*100):0;return <div className="full-modal summary"><button className="modal-close" onClick={onClose}><X/></button><div className="summary-medal"><Trophy/></div><small>SESSION COMPLETE</small><h1>{weeklyPlans[parseLocalDate(date).getDay()].title}</h1><p>{date}</p><div className="summary-grid"><Stat label="Duration" value={fmtTime(s?.durationSeconds||0)} sub="training time"/><Stat label="Working sets" value={String(working.length)} sub="completed"/><Stat label="Volume" value={`${formatVolume(volume)} lb`} sub="working sets"/><Stat label="PR events" value={String(events.length)} sub="today"/></div>{previousSame&&<div className={`comparison ${delta>=0?'up':'down'}`}>{delta>=0?<TrendingUp/>:<TrendingDown/>}<strong>{delta>=0?'+':''}{delta}% volume vs previous {s.workoutType} session</strong></div>}{events.slice(0,3).map((e,i)=><div className="summary-pr" key={i}><Trophy/><span><strong>{e.exerciseName}</strong><small>{e.type} PR • {Math.round(e.weight)} lb × {e.reps}</small></span></div>)}<h3>Exercise log</h3><div className="summary-exercises">{Object.entries(all).map(([id,sets])=>{const done=sets.filter(x=>x.done);if(!done.length)return null;return <div key={id}><strong>{done[0].exerciseName}</strong><span>{done.map(x=>`${x.side?`${x.side} `:''}${x.weight?`${x.weight}${x.weightUnit}×`:''}${x.reps||'✓'}`).join(' • ')}</span></div>})}</div>{s?.notes&&<div className="summary-note"><NotebookPen/><span>{s.notes}</span></div>}<div className="summary-quote">Consistency wins when the next session is recoverable.</div><div className="summary-actions"><button onClick={onEdit}>EDIT WORKOUT</button><button className="primary" onClick={onClose}>DONE</button></div></div>}
+function HistorySheet({exerciseId,state,onClose}:{exerciseId:string;state:AppState;onClose:()=>void}){const history=exerciseHistory(state,exerciseId),ex=findExercise(exerciseId),points=history.map(h=>Math.max(0,...h.sets.map(s=>epley(canonicalLb(Number(s.weight),s.weightUnit),Number(s.reps))))),max=Math.max(1,...points);return <Sheet title="Exercise history" onClose={onClose}><div className="history-head"><div className="mini-visual"><ExerciseVisual visual={ex?.visual||'cardio'} name={ex?.name||exerciseId}/></div><div><strong>{ex?.name||history[0]?.sets[0]?.exerciseName||exerciseId}</strong><p>{history.length} logged sessions</p></div></div>{points.length>1&&<svg className="sparkline" viewBox="0 0 300 100" preserveAspectRatio="none"><polyline fill="none" stroke="currentColor" strokeWidth="4" points={points.map((p,i)=>`${i*(300/(points.length-1))},${92-p/max*80}`).join(' ')}/></svg>}<div className="history-list">{history.slice().reverse().map(h=><div key={h.date}><small>{h.date}</small><strong>{h.sets.map(s=>`${s.weight}${s.weightUnit}×${s.reps}${s.side?` ${s.side}`:''}`).join(' • ')}</strong></div>)}</div></Sheet>}
 function Sheet({title,onClose,children}:{title:string;onClose:()=>void;children:any}){return <div className="sheet-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}><section className="sheet"><header><strong>{title}</strong><button onClick={onClose}><X/></button></header>{children}</section></div>}
