@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ChevronRight, NotebookPen, RefreshCw, TrendingDown, TrendingUp, Trophy, X } from 'lucide-react';
 import type { AppState, Exercise, MachineSetting } from '../types';
-import { derivePREvents, epley, exerciseHistory, findExercise as _unused, canonicalLb, sessionVolume } from '../store';
+import { derivePREvents, epley, exerciseHistory, canonicalLb, sessionVolume } from '../store';
 import { findExercise, weeklyPlans } from '../routine';
 import { ExerciseVisual } from '../visuals';
 
