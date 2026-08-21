@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { Amplify } from 'aws-amplify';
 import outputs from './amplify_outputs.json';
-import App from './App';
+import AppShell from './app/AppShell';
 import AuthGate from './AuthGate';
 import './styles.css';
 
@@ -10,7 +10,7 @@ Amplify.configure(outputs as any);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AuthGate>{({user,logout}) => <App user={user} logout={logout}/>}</AuthGate>
+    <AuthGate>{({user,logout}) => <AppShell user={user} logout={logout}/>}</AuthGate>
   </React.StrictMode>
 );
 
