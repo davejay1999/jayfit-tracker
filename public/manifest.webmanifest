@@ -1,11 +1,15 @@
 {
   "name": "JayFit Workout Tracker",
   "short_name": "JayFit",
-  "start_url": "/jayfit-tracker/",
-  "scope": "/jayfit-tracker/",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#090b10",
-  "theme_color": "#090b10",
-  "description": "Personal Push Pull Legs workout tracker with recovery, PRs and history.",
-  "icons": []
+  "orientation": "portrait-primary",
+  "background_color": "#07090d",
+  "theme_color": "#07090d",
+  "description": "Private Push Pull Legs workout tracker with recovery, personal records, progression and cloud sync.",
+  "icons": [
+    {"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}
+  ]
 }
