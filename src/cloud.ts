@@ -4,117 +4,49 @@ import type { AppState, MachineSetting, SessionEntry, SetEntry, UserSettings } f
 import { DEFAULT_SETTINGS } from './store';
 
 const client:any = generateClient<Schema>();
+const safeJson=<T,>(value:any,fallback:T):T=>{try{return value?JSON.parse(value):fallback}catch{return fallback}};
 
-const safeJson = <T,>(value:any, fallback:T):T => {
-  try { return value ? JSON.parse(value) : fallback; } catch { return fallback; }
-};
-
-export async function loadCloudState(): Promise<Partial<AppState>> {
-  const [sessionsRes, setsRes, machineRes, profileRes] = await Promise.all([
-    client.models.WorkoutSession.list(),
-    client.models.SetLog.list(),
-    client.models.ExerciseSetting.list(),
-    client.models.UserProfile.list(),
-  ]);
-  const sessions:Record<string,SessionEntry> = {};
-  (sessionsRes.data || []).forEach((row:any) => {
-    sessions[row.date] = {
-      cloudId:row.id,date:row.date,workoutType:row.workoutType,status:row.status,
-      startedAt:row.startedAt || undefined,completedAt:row.completedAt || undefined,
-      durationSeconds:row.durationSeconds ?? undefined,notes:row.notes || undefined,
-      sorenessScore:row.sorenessScore ?? undefined,sorenessAreas:safeJson(row.sorenessAreasJson,{}),
-      planSnapshot:row.planSnapshotJson || undefined,selectedCardio:row.selectedCardio || undefined,
-      substitutions:safeJson(row.substitutionsJson,{}),
-    };
-  });
-  const sets:Record<string,Record<string,SetEntry[]>> = {};
-  const bySession:Record<string,string> = {};
-  Object.entries(sessions).forEach(([date,s])=>{if(s.cloudId)bySession[s.cloudId]=date;});
-  (setsRes.data || []).forEach((row:any) => {
-    const date=bySession[row.sessionId]; if(!date) return;
-    sets[date] ||= {}; sets[date][row.exerciseId] ||= [];
-    sets[date][row.exerciseId].push({
-      cloudId:row.id,exerciseId:row.exerciseId,exerciseName:row.exerciseName || row.exerciseId,
-      phase:(row.phase || (row.setType==='WARMUP'?'warmup':row.setType==='COOLDOWN'?'cooldown':'main')) as any,
-      setNumber:row.setNumber,side:row.side || undefined,weight:row.weight == null ? '' : String(row.weight),
-      reps:row.reps == null ? '' : String(row.reps),durationSeconds:row.durationSeconds ?? undefined,
-      done:!!row.completed,notes:row.notes || undefined,setType:row.setType,
-      weightUnit:(row.weightUnit || 'lb') as any,loggedAt:row.loggedAt || undefined,
-    });
-  });
-  Object.values(sets).forEach(exs=>Object.values(exs).forEach(rows=>rows.sort((a,b)=>a.setNumber-b.setNumber || (a.side==='R'?-1:1))));
-  const machineSettings:Record<string,MachineSetting> = {};
-  (machineRes.data || []).forEach((row:any)=>machineSettings[row.exerciseId]={
-    cloudId:row.id,exerciseId:row.exerciseId,seat:row.seat||'',backrest:row.backrest||'',handle:row.handle||'',
-    machine:row.machine||'',pin:row.pin||'',preferredWeight:row.preferredWeight==null?'':String(row.preferredWeight),notes:row.notes||'',
-  });
-  const profile=(profileRes.data||[])[0];
-  const settings:UserSettings = profile ? {
-    ...DEFAULT_SETTINGS,
-    weightUnit:(profile.weightUnit||'lb') as any,
-    defaultRestSeconds:profile.defaultRestSeconds ?? 90,
-    beginnerMode:!!profile.beginnerMode,
-    theme:'dark',autoRestTimer:profile.autoRestTimer !== false,
-    routineOverrides:safeJson(profile.routineOverridesJson,{}),
-  } : DEFAULT_SETTINGS;
+export async function loadCloudState():Promise<Partial<AppState>>{
+  const [sessionsRes,setsRes,machineRes,profileRes]=await Promise.all([client.models.WorkoutSession.list(),client.models.SetLog.list(),client.models.ExerciseSetting.list(),client.models.UserProfile.list()]);
+  const sessions:Record<string,SessionEntry>={};
+  (sessionsRes.data||[]).forEach((row:any)=>sessions[row.date]={cloudId:row.id,date:row.date,workoutType:row.workoutType,status:row.status,startedAt:row.startedAt||undefined,completedAt:row.completedAt||undefined,durationSeconds:row.durationSeconds??undefined,notes:row.notes||undefined,sorenessScore:row.sorenessScore??undefined,sorenessAreas:safeJson(row.sorenessAreasJson,{}),planSnapshot:row.planSnapshotJson||undefined,selectedCardio:row.selectedCardio||undefined,substitutions:safeJson(row.substitutionsJson,{})});
+  const sets:Record<string,Record<string,SetEntry[]>>={};const bySession:Record<string,string>={};Object.entries(sessions).forEach(([date,s])=>{if(s.cloudId)bySession[s.cloudId]=date});
+  (setsRes.data||[]).forEach((row:any)=>{const date=bySession[row.sessionId];if(!date)return;sets[date]||={};sets[date][row.exerciseId]||=[];sets[date][row.exerciseId].push({cloudId:row.id,exerciseId:row.exerciseId,exerciseName:row.exerciseName||row.exerciseId,phase:(row.phase||(row.setType==='WARMUP'?'warmup':row.setType==='COOLDOWN'?'cooldown':'main')) as any,setNumber:row.setNumber,side:row.side||undefined,weight:row.weight==null?'':String(row.weight),reps:row.reps==null?'':String(row.reps),durationSeconds:row.durationSeconds??undefined,done:!!row.completed,notes:row.notes||undefined,setType:row.setType,weightUnit:(row.weightUnit||'lb') as any,loggedAt:row.loggedAt||undefined})});
+  Object.values(sets).forEach(exs=>Object.values(exs).forEach(rows=>rows.sort((a,b)=>a.setNumber-b.setNumber||(a.side==='R'?-1:1))));
+  const machineSettings:Record<string,MachineSetting>={};(machineRes.data||[]).forEach((row:any)=>machineSettings[row.exerciseId]={cloudId:row.id,exerciseId:row.exerciseId,seat:row.seat||'',backrest:row.backrest||'',handle:row.handle||'',machine:row.machine||'',pin:row.pin||'',preferredWeight:row.preferredWeight==null?'':String(row.preferredWeight),notes:row.notes||''});
+  const profile=(profileRes.data||[])[0];const settings:UserSettings=profile?{...DEFAULT_SETTINGS,weightUnit:(profile.weightUnit||'lb') as any,defaultRestSeconds:profile.defaultRestSeconds??90,beginnerMode:!!profile.beginnerMode,theme:'dark',autoRestTimer:profile.autoRestTimer!==false,routineOverrides:safeJson(profile.routineOverridesJson,{})}:DEFAULT_SETTINGS;
   return {sessions,sets,machineSettings,settings,profileCloudId:profile?.id,lastSyncAt:new Date().toISOString()};
 }
 
-export async function saveProfile(cloudId:string|undefined,settings:UserSettings):Promise<string|undefined> {
-  const input:any={profileKey:'primary',displayName:'Jay',weightUnit:settings.weightUnit,defaultRestSeconds:settings.defaultRestSeconds,
-    beginnerMode:settings.beginnerMode,theme:settings.theme,autoRestTimer:settings.autoRestTimer,
-    routineOverridesJson:JSON.stringify(settings.routineOverrides),updatedAtClient:new Date().toISOString()};
-  if(cloudId){const r=await client.models.UserProfile.update({id:cloudId,...input});return r.data?.id;}
+export async function saveProfile(cloudId:string|undefined,settings:UserSettings):Promise<string|undefined>{
+  const input:any={profileKey:'primary',displayName:'Jay',weightUnit:settings.weightUnit,defaultRestSeconds:settings.defaultRestSeconds,beginnerMode:settings.beginnerMode,theme:settings.theme,autoRestTimer:settings.autoRestTimer,routineOverridesJson:JSON.stringify(settings.routineOverrides),updatedAtClient:new Date().toISOString()};
+  if(cloudId){const r=await client.models.UserProfile.update({id:cloudId,...input});return r.data?.id}
+  const existing=await client.models.UserProfile.list({filter:{profileKey:{eq:'primary'}}});const row=(existing.data||[])[0];if(row){await client.models.UserProfile.update({id:row.id,...input});return row.id}
   const r=await client.models.UserProfile.create({...input,createdAtClient:new Date().toISOString()});return r.data?.id;
 }
 
-export async function saveSession(session:SessionEntry,totalVolume=0):Promise<string|undefined> {
-  const input:any={date:session.date,workoutType:session.workoutType,status:session.status,startedAt:session.startedAt||null,
-    completedAt:session.completedAt||null,durationSeconds:session.durationSeconds??null,totalVolume,
-    notes:session.notes||null,sorenessScore:session.sorenessScore??null,sorenessAreasJson:JSON.stringify(session.sorenessAreas||{}),
-    planSnapshotJson:session.planSnapshot||null,selectedCardio:session.selectedCardio||null,substitutionsJson:JSON.stringify(session.substitutions||{})};
-  if(session.cloudId){const r=await client.models.WorkoutSession.update({id:session.cloudId,...input});return r.data?.id;}
-  const existing=await client.models.WorkoutSession.list({filter:{date:{eq:session.date}}});
-  const row=(existing.data||[])[0];
-  if(row){await client.models.WorkoutSession.update({id:row.id,...input});return row.id;}
+export async function saveSession(session:SessionEntry,totalVolume=0):Promise<string|undefined>{
+  const input:any={date:session.date,workoutType:session.workoutType,status:session.status,startedAt:session.startedAt||null,completedAt:session.completedAt||null,durationSeconds:session.durationSeconds??null,totalVolume,notes:session.notes||null,sorenessScore:session.sorenessScore??null,sorenessAreasJson:JSON.stringify(session.sorenessAreas||{}),planSnapshotJson:session.planSnapshot||null,selectedCardio:session.selectedCardio||null,substitutionsJson:JSON.stringify(session.substitutions||{})};
+  if(session.cloudId){const r=await client.models.WorkoutSession.update({id:session.cloudId,...input});return r.data?.id}
+  const existing=await client.models.WorkoutSession.list({filter:{date:{eq:session.date}}});const row=(existing.data||[])[0];if(row){await client.models.WorkoutSession.update({id:row.id,...input});return row.id}
   const r=await client.models.WorkoutSession.create(input);return r.data?.id;
 }
 
-export async function saveSet(sessionId:string,set:SetEntry):Promise<string|undefined> {
-  const input:any={sessionId,exerciseId:set.exerciseId,exerciseName:set.exerciseName,phase:set.phase,setNumber:set.setNumber,side:set.side||null,
-    setType:set.setType,weight:set.weight===''?null:Number(set.weight),weightUnit:set.weightUnit,reps:set.reps===''?null:Number(set.reps),
-    durationSeconds:set.durationSeconds??null,completed:set.done,notes:set.notes||null,loggedAt:set.loggedAt||new Date().toISOString()};
-  if(set.cloudId){const r=await client.models.SetLog.update({id:set.cloudId,...input});return r.data?.id;}
+export async function saveSet(sessionId:string,set:SetEntry):Promise<string|undefined>{
+  const input:any={sessionId,exerciseId:set.exerciseId,exerciseName:set.exerciseName,phase:set.phase,setNumber:set.setNumber,side:set.side||null,setType:set.setType,weight:set.weight===''?null:Number(set.weight),weightUnit:set.weightUnit,reps:set.reps===''?null:Number(set.reps),durationSeconds:set.durationSeconds??null,completed:set.done,notes:set.notes||null,loggedAt:set.loggedAt||new Date().toISOString()};
+  if(set.cloudId){const r=await client.models.SetLog.update({id:set.cloudId,...input});return r.data?.id}
+  const existing=await client.models.SetLog.list({filter:{sessionId:{eq:sessionId},exerciseId:{eq:set.exerciseId}}});
+  const row=(existing.data||[]).find((x:any)=>x.setNumber===set.setNumber&&(x.side||'')===(set.side||'')&&x.setType===set.setType);
+  if(row){await client.models.SetLog.update({id:row.id,...input});return row.id}
   const r=await client.models.SetLog.create(input);return r.data?.id;
 }
 
 export async function saveMachineSetting(setting:MachineSetting,unit:string):Promise<string|undefined>{
-  const input:any={exerciseId:setting.exerciseId,seat:setting.seat||null,backrest:setting.backrest||null,handle:setting.handle||null,
-    machine:setting.machine||null,pin:setting.pin||null,preferredWeight:setting.preferredWeight?Number(setting.preferredWeight):null,
-    preferredUnit:unit,notes:setting.notes||null,updatedAtClient:new Date().toISOString()};
-  if(setting.cloudId){const r=await client.models.ExerciseSetting.update({id:setting.cloudId,...input});return r.data?.id;}
-  const existing=await client.models.ExerciseSetting.list({filter:{exerciseId:{eq:setting.exerciseId}}});
-  const row=(existing.data||[])[0]; if(row){await client.models.ExerciseSetting.update({id:row.id,...input});return row.id;}
+  const input:any={exerciseId:setting.exerciseId,seat:setting.seat||null,backrest:setting.backrest||null,handle:setting.handle||null,machine:setting.machine||null,pin:setting.pin||null,preferredWeight:setting.preferredWeight?Number(setting.preferredWeight):null,preferredUnit:unit,notes:setting.notes||null,updatedAtClient:new Date().toISOString()};
+  if(setting.cloudId){const r=await client.models.ExerciseSetting.update({id:setting.cloudId,...input});return r.data?.id}
+  const existing=await client.models.ExerciseSetting.list({filter:{exerciseId:{eq:setting.exerciseId}}});const row=(existing.data||[])[0];if(row){await client.models.ExerciseSetting.update({id:row.id,...input});return row.id}
   const r=await client.models.ExerciseSetting.create(input);return r.data?.id;
 }
 
-export async function deleteCloudData(){
-  const models=['SetLog','PersonalRecord','RecoveryLog','ExerciseSetting','WorkoutSession','UserProfile'];
-  for(const name of models){
-    const model=client.models[name]; if(!model) continue;
-    const result=await model.list();
-    for(const row of result.data||[]) await model.delete({id:row.id});
-  }
-}
-
-export async function uploadLocalState(state:AppState,onSessionId?:(date:string,id:string)=>void,onSetId?:(date:string,exerciseId:string,index:number,id:string)=>void){
-  for(const [date,session] of Object.entries(state.sessions)){
-    const id=await saveSession(session); if(!id) continue; onSessionId?.(date,id);
-    const exercises=state.sets[date]||{};
-    for(const [exerciseId,rows] of Object.entries(exercises)){
-      for(let i=0;i<rows.length;i++){
-        const sid=await saveSet(id,rows[i]); if(sid) onSetId?.(date,exerciseId,i,sid);
-      }
-    }
-  }
-}
+export async function deleteCloudData(){for(const name of ['SetLog','PersonalRecord','RecoveryLog','ExerciseSetting','WorkoutSession','UserProfile']){const model=client.models[name];if(!model)continue;const result=await model.list();for(const row of result.data||[])await model.delete({id:row.id})}}
+export async function uploadLocalState(state:AppState,onSessionId?:(date:string,id:string)=>void,onSetId?:(date:string,exerciseId:string,index:number,id:string)=>void){for(const [date,session] of Object.entries(state.sessions)){const id=await saveSession(session);if(!id)continue;onSessionId?.(date,id);for(const [exerciseId,rows] of Object.entries(state.sets[date]||{})){for(let i=0;i<rows.length;i++){const sid=await saveSet(id,rows[i]);if(sid)onSetId?.(date,exerciseId,i,sid)}}}}
